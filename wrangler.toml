@@ -1,0 +1,8 @@
+name = "edgetunnel"
+main = "_worker.js"
+compatibility_date = "2025-11-04"
+
+# 如需 KV 命名空间，取消下面注释并填入你的 KV ID
+# [[kv_namespaces]]
+# binding = "KV"
+# id = ""

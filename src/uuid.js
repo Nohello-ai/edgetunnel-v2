@@ -3,7 +3,7 @@
 // 对应原文件: 读取十六进制半字节、获取UUID字节、UUID字节匹配
 // ============================================================
 
-import { toBytes } from './utils.js';
+import { toBytes, md5md5 } from './utils.js';
 
 const UUID_BYTE_CACHE = new Map();
 const MAX_CACHE_SIZE = 32;
@@ -54,7 +54,6 @@ export async function generateUserID(env, adminPassword, secretKey) {
   const envUUID = env.UUID || env.uuid;
   if (envUUID && uuidRegex.test(envUUID)) return envUUID.toLowerCase();
 
-  const { md5md5 } = await import('./utils.js');
   const hash = await md5md5(adminPassword + secretKey);
   return [
     hash.slice(0, 8),

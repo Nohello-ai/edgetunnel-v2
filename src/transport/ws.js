@@ -7,12 +7,7 @@ import { parseVLESS } from "../protocol/vless.js";
 import { forwardataTCP, forwardataudp, isSpeedTestSite } from "../proxy/forward.js";
 import { forwardTrojanUDP } from "../protocol/trojan.js";
 import { SS_CIPHER_CONFIGS, SS_TAG_LEN, SS_NONCE_LEN, deriveMasterKey, deriveSessionKey, ssEncrypt, ssDecrypt } from "../protocol/shadowsocks.js";
-
-// ---- UUID helpers (inline) ----
-const UUID_BYTES_CACHE = new Map();
-function hexNibble(code) { if (code >= 48 && code <= 57) return code - 48; code |= 32; if (code >= 97 && code <= 102) return code - 87; return -1; }
-function getUUIDBytes(uuid) { const key = String(uuid || ""); let c = UUID_BYTES_CACHE.get(key); if (c) return c; const clean = key.replace(/-/g, ""); if (clean.length !== 32) return null; const bytes = new Uint8Array(16); for (let i = 0; i < 16; i++) { const h = hexNibble(clean.charCodeAt(i * 2)); const l = hexNibble(clean.charCodeAt(i * 2 + 1)); if (h < 0 || l < 0) return null; bytes[i] = (h << 4) | l; } if (UUID_BYTES_CACHE.size >= 32) UUID_BYTES_CACHE.clear(); UUID_BYTES_CACHE.set(key, bytes); return bytes; }
-function uuidBytesMatch(data, offset, uuid) { const exp = getUUIDBytes(uuid); if (!exp || data.byteLength < offset + 16) return false; for (let i = 0; i < 16; i++) if (data[offset + i] !== exp[i]) return false; return true; }
+import { getUUIDBytes, uuidBytesMatch } from "../uuid.js";
 
 // ---- Early data validation/decoding (original lines 1087-1126) ----
 function isValidWSEarlyData(bytes, token) {

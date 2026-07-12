@@ -3,46 +3,14 @@ import { toBytes, dataLength, log, closeSocketQuietly, sha224str } from '../util
 import { createUpstreamQueue } from '../stream/upstream-queue.js';
 import { forwardataTCP, forwardataudp, isSpeedTestSite } from '../proxy/forward.js';
 import { forwardTrojanUDP } from '../protocol/trojan.js';
+import { getUUIDBytes, uuidBytesMatch } from '../uuid.js';
 
 const VLESS_DECODER = new TextDecoder();
-const UUID_CACHE = new Map();
-
-function hexNibble(code) {
-  if (code >= 48 && code <= 57) return code - 48;
-  code |= 32;
-  if (code >= 97 && code <= 102) return code - 87;
-  return -1;
-}
-
-function getUUIDBytes(uuid) {
-  const key = String(uuid || '');
-  let c = UUID_CACHE.get(key);
-  if (c) return c;
-  const clean = key.replace(/-/g, '');
-  if (clean.length !== 32) return null;
-  const bytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) {
-    const h = hexNibble(clean.charCodeAt(i * 2));
-    const l = hexNibble(clean.charCodeAt(i * 2 + 1));
-    if (h < 0 || l < 0) return null;
-    bytes[i] = (h << 4) | l;
-  }
-  if (UUID_CACHE.size >= 32) UUID_CACHE.clear();
-  UUID_CACHE.set(key, bytes);
-  return bytes;
-}
-
-function uuidMatch(data, offset, uuid) {
-  const exp = getUUIDBytes(uuid);
-  if (!exp || data.byteLength < offset + 16) return false;
-  for (let i = 0; i < 16; i++) if (data[offset + i] !== exp[i]) return false;
-  return true;
-}
 
 function parseVLESSFirst(data, token) {
   const len = data.byteLength;
   if (len < 18) return { s: 'more' };
-  if (!uuidMatch(data, 1, token)) return { s: 'bad' };
+  if (!uuidBytesMatch(data, 1, token)) return { s: 'bad' };
   const opt = data[17], ci = 18 + opt;
   if (len < ci + 1) return { s: 'more' };
   const cmd = data[ci];

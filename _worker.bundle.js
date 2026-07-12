@@ -4900,10 +4900,14 @@ async function handleFetch(request, env, ctx) {
 // Service Worker 入口（Workers 默认格式）
 addEventListener('fetch', event => {
   // Cloudflare Workers Service Worker 格式中，env 绑定通过 globalThis 暴露
-  // 用 Proxy 做兼容，让所有 env.XXX 访问自动落到 globalThis.XXX
+  // 用 Proxy 做兼容，但过滤掉内置函数（如 URL、fetch 等），只暴露字符串/对象类型的绑定
   const env = new Proxy({}, {
     get(_target, prop) {
-      return globalThis[prop];
+      const val = globalThis[prop];
+      // Cloudflare 绑定（KV、R2、D1、Secrets 等）都是字符串或对象，不会是函数
+      // 跳过内置函数避免 env.URL 拿到构造函数
+      if (typeof val === 'function') return undefined;
+      return val;
     }
   });
   const ctx = { waitUntil: event.waitUntil?.bind(event), passThroughOnException: event.passThroughOnException?.bind(event) };

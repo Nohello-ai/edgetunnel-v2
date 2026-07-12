@@ -5,14 +5,21 @@ import { routeRequest } from './src/router.js';
 
 export default {
   async fetch(request, env, ctx) {
-    // 1. URL 清洗（对齐原版）
-    const url = cleanUrl(request.url);
+    try {
+      // 1. URL 清洗（对齐原版）
+      const url = cleanUrl(request.url);
 
-    // 2. 构建请求上下文（线程安全，替代全局变量）
-    const ctx_ = createRequestContext(request, env, url);
+      // 2. 构建请求上下文（线程安全，替代全局变量）
+      const ctx_ = createRequestContext(request, env, url);
 
-    // 3. 路由分发
-    return await routeRequest(request, env, ctx, url, ctx_);
+      // 3. 路由分发
+      return await routeRequest(request, env, ctx, url, ctx_);
+    } catch (e) {
+      return new Response('Worker Error: ' + (e?.message || e?.stack || String(e)), {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }
   },
 };
 

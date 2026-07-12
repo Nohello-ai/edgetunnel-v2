@@ -1921,7 +1921,7 @@ async function handleGRPC(request, yourUUID) {
 // ====== src/transport/xhttp.js ======
 // transport/xhttp.js — XHTTP 传输处理（原版提取，行 529-837）
 
-const VLESS_DECODER = new TextDecoder();
+const XHTTP_DECODER = new TextDecoder();
 
 function parseVLESSFirst(data, token) {
   const len = data.byteLength;
@@ -1937,7 +1937,7 @@ function parseVLESSFirst(data, token) {
   const at = data[pi + 2], ai = pi + 3;
   let hl = -1, host = '';
   if (at === 1) { if (len < ai + 4) return { s: 'more' }; host = `${data[ai]}.${data[ai+1]}.${data[ai+2]}.${data[ai+3]}`; hl = ai + 4; }
-  else if (at === 2) { if (len < ai + 1) return { s: 'more' }; const dl = data[ai]; if (len < ai + 1 + dl) return { s: 'more' }; host = VLESS_DECODER.decode(data.subarray(ai + 1, ai + 1 + dl)); hl = ai + 1 + dl; }
+  else if (at === 2) { if (len < ai + 1) return { s: 'more' }; const dl = data[ai]; if (len < ai + 1 + dl) return { s: 'more' }; host = XHTTP_DECODER.decode(data.subarray(ai + 1, ai + 1 + dl)); hl = ai + 1 + dl; }
   else if (at === 3) { if (len < ai + 16) return { s: 'more' }; const a = []; for (let i = 0; i < 8; i++) { const b = ai + i * 2; a.push(((data[b] << 8) | data[b + 1]).toString(16)); } host = a.join(':'); hl = ai + 16; }
   else return { s: 'bad' };
   if (!host) return { s: 'bad' };
@@ -1958,7 +1958,7 @@ function parseTrojanFirst(data, token) {
   const udp = cmd === 3, at = data[ss + 1];
   let cur = ss + 2, host = '';
   if (at === 1) { if (len < cur + 4) return { s: 'more' }; host = `${data[cur]}.${data[cur+1]}.${data[cur+2]}.${data[cur+3]}`; cur += 4; }
-  else if (at === 3) { if (len < cur + 1) return { s: 'more' }; const dl = data[cur]; if (len < cur + 1 + dl) return { s: 'more' }; host = VLESS_DECODER.decode(data.subarray(cur + 1, cur + 1 + dl)); cur += 1 + dl; }
+  else if (at === 3) { if (len < cur + 1) return { s: 'more' }; const dl = data[cur]; if (len < cur + 1 + dl) return { s: 'more' }; host = XHTTP_DECODER.decode(data.subarray(cur + 1, cur + 1 + dl)); cur += 1 + dl; }
   else if (at === 4) { if (len < cur + 16) return { s: 'more' }; const a = []; for (let i = 0; i < 8; i++) { const b = cur + i * 2; a.push(((data[b] << 8) | data[b + 1]).toString(16)); } host = a.join(':'); cur += 16; }
   else return { s: 'bad' };
   if (!host) return { s: 'bad' };
@@ -3441,8 +3441,8 @@ async function httpsConnect(targetHost, targetPort, initialData, parsedAddress, 
 // ====== src/proxy/turn.js ======
 // proxy/turn.js — TURN + SSTP 代理连接（原版提取，行 3398-4101）
 
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+const turnEncoder = new TextEncoder();
+const turnDecoder = new TextDecoder();
 
 // DNS-over-HTTPS 查询（内联，供 turnConnect / sstpConnect 使用）
 async function dohQuery(domain, type = 'A', server = 'https://cloudflare-dns.com/dns-query') {
@@ -3605,11 +3605,11 @@ async function turnConnect(proxy, targetHost, targetPort, TCP连接) {
 			const nonce = message.attributes[TURN_STUN_ATTR.NONCE];
 			if (!realmBytes || !nonce?.byteLength) throw new Error('TURN authentication challenge is missing realm or nonce');
 
-			const realm = textDecoder.decode(realmBytes);
-			integrityKey = new Uint8Array(await crypto.subtle.digest('MD5', textEncoder.encode(`${proxy.username}:${realm}:${proxy.password}`)));
+			const realm = turnDecoder.decode(realmBytes);
+			integrityKey = new Uint8Array(await crypto.subtle.digest('MD5', turnEncoder.encode(`${proxy.username}:${realm}:${proxy.password}`)));
 			authAttributes = [
-				createTurnStunAttribute(TURN_STUN_ATTR.USERNAME, textEncoder.encode(proxy.username)),
-				createTurnStunAttribute(TURN_STUN_ATTR.REALM, textEncoder.encode(realm)),
+				createTurnStunAttribute(TURN_STUN_ATTR.USERNAME, turnEncoder.encode(proxy.username)),
+				createTurnStunAttribute(TURN_STUN_ATTR.REALM, turnEncoder.encode(realm)),
 				createTurnStunAttribute(TURN_STUN_ATTR.NONCE, nonce)
 			];
 
@@ -3770,7 +3770,7 @@ async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		for (; ;) {
 			const lineEnd = bufferedBytes.indexOf(10);
 			if (lineEnd >= 0) {
-				const line = textDecoder.decode(bufferedBytes.subarray(0, lineEnd));
+				const line = turnDecoder.decode(bufferedBytes.subarray(0, lineEnd));
 				bufferedBytes = bufferedBytes.subarray(lineEnd + 1);
 				return line.replace(/\r$/, '');
 			}
@@ -3839,7 +3839,7 @@ async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		writer = socket.writable.getWriter();
 
 		const displayHost = serverHost.includes(':') ? `[${serverHost}]` : serverHost;
-		const httpRequest = textEncoder.encode(
+		const httpRequest = turnEncoder.encode(
 			`SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n`
 			+ `Host: ${Number(serverPort) === 443 ? displayHost : `${displayHost}:${serverPort}`}\r\n`
 			+ 'Content-Length: 18446744073709551615\r\n'
@@ -3879,8 +3879,8 @@ async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		const sendPapIfReady = async () => {
 			if (!localLcpAcked || !peerLcpAcked || !papRequired || papSent) return;
 			if (proxy.username === null || proxy.password === null) throw new Error('SSTP server requires PAP authentication');
-			const username = textEncoder.encode(proxy.username);
-			const password = textEncoder.encode(proxy.password);
+			const username = turnEncoder.encode(proxy.username);
+			const password = turnEncoder.encode(proxy.password);
 			if (username.byteLength > 255 || password.byteLength > 255) throw new Error('SSTP username/password is too long');
 			const papLength = 6 + username.byteLength + password.byteLength;
 			const frame = new Uint8Array(2 + papLength);

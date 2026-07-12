@@ -1,8 +1,8 @@
 // proxy/turn.js — TURN + SSTP 代理连接（原版提取，行 3398-4101）
 import { toBytes, dataLength, concatBytes, isIPv4, stripIPv6Brackets, withTimeout } from '../utils.js';
 
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+const turnEncoder = new TextEncoder();
+const turnDecoder = new TextDecoder();
 
 // DNS-over-HTTPS 查询（内联，供 turnConnect / sstpConnect 使用）
 async function dohQuery(domain, type = 'A', server = 'https://cloudflare-dns.com/dns-query') {
@@ -167,11 +167,11 @@ export async function turnConnect(proxy, targetHost, targetPort, TCP连接) {
 			const nonce = message.attributes[TURN_STUN_ATTR.NONCE];
 			if (!realmBytes || !nonce?.byteLength) throw new Error('TURN authentication challenge is missing realm or nonce');
 
-			const realm = textDecoder.decode(realmBytes);
-			integrityKey = new Uint8Array(await crypto.subtle.digest('MD5', textEncoder.encode(`${proxy.username}:${realm}:${proxy.password}`)));
+			const realm = turnDecoder.decode(realmBytes);
+			integrityKey = new Uint8Array(await crypto.subtle.digest('MD5', turnEncoder.encode(`${proxy.username}:${realm}:${proxy.password}`)));
 			authAttributes = [
-				createTurnStunAttribute(TURN_STUN_ATTR.USERNAME, textEncoder.encode(proxy.username)),
-				createTurnStunAttribute(TURN_STUN_ATTR.REALM, textEncoder.encode(realm)),
+				createTurnStunAttribute(TURN_STUN_ATTR.USERNAME, turnEncoder.encode(proxy.username)),
+				createTurnStunAttribute(TURN_STUN_ATTR.REALM, turnEncoder.encode(realm)),
 				createTurnStunAttribute(TURN_STUN_ATTR.NONCE, nonce)
 			];
 
@@ -332,7 +332,7 @@ export async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		for (; ;) {
 			const lineEnd = bufferedBytes.indexOf(10);
 			if (lineEnd >= 0) {
-				const line = textDecoder.decode(bufferedBytes.subarray(0, lineEnd));
+				const line = turnDecoder.decode(bufferedBytes.subarray(0, lineEnd));
 				bufferedBytes = bufferedBytes.subarray(lineEnd + 1);
 				return line.replace(/\r$/, '');
 			}
@@ -401,7 +401,7 @@ export async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		writer = socket.writable.getWriter();
 
 		const displayHost = serverHost.includes(':') ? `[${serverHost}]` : serverHost;
-		const httpRequest = textEncoder.encode(
+		const httpRequest = turnEncoder.encode(
 			`SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n`
 			+ `Host: ${Number(serverPort) === 443 ? displayHost : `${displayHost}:${serverPort}`}\r\n`
 			+ 'Content-Length: 18446744073709551615\r\n'
@@ -441,8 +441,8 @@ export async function sstpConnect(proxy, targetHost, targetPort, TCP连接) {
 		const sendPapIfReady = async () => {
 			if (!localLcpAcked || !peerLcpAcked || !papRequired || papSent) return;
 			if (proxy.username === null || proxy.password === null) throw new Error('SSTP server requires PAP authentication');
-			const username = textEncoder.encode(proxy.username);
-			const password = textEncoder.encode(proxy.password);
+			const username = turnEncoder.encode(proxy.username);
+			const password = turnEncoder.encode(proxy.password);
 			if (username.byteLength > 255 || password.byteLength > 255) throw new Error('SSTP username/password is too long');
 			const papLength = 6 + username.byteLength + password.byteLength;
 			const frame = new Uint8Array(2 + papLength);

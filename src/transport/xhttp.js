@@ -5,7 +5,7 @@ import { forwardataTCP, forwardataudp, isSpeedTestSite } from '../proxy/forward.
 import { forwardTrojanUDP } from '../protocol/trojan.js';
 import { getUUIDBytes, uuidBytesMatch } from '../uuid.js';
 
-const VLESS_DECODER = new TextDecoder();
+const XHTTP_DECODER = new TextDecoder();
 
 function parseVLESSFirst(data, token) {
   const len = data.byteLength;
@@ -21,7 +21,7 @@ function parseVLESSFirst(data, token) {
   const at = data[pi + 2], ai = pi + 3;
   let hl = -1, host = '';
   if (at === 1) { if (len < ai + 4) return { s: 'more' }; host = `${data[ai]}.${data[ai+1]}.${data[ai+2]}.${data[ai+3]}`; hl = ai + 4; }
-  else if (at === 2) { if (len < ai + 1) return { s: 'more' }; const dl = data[ai]; if (len < ai + 1 + dl) return { s: 'more' }; host = VLESS_DECODER.decode(data.subarray(ai + 1, ai + 1 + dl)); hl = ai + 1 + dl; }
+  else if (at === 2) { if (len < ai + 1) return { s: 'more' }; const dl = data[ai]; if (len < ai + 1 + dl) return { s: 'more' }; host = XHTTP_DECODER.decode(data.subarray(ai + 1, ai + 1 + dl)); hl = ai + 1 + dl; }
   else if (at === 3) { if (len < ai + 16) return { s: 'more' }; const a = []; for (let i = 0; i < 8; i++) { const b = ai + i * 2; a.push(((data[b] << 8) | data[b + 1]).toString(16)); } host = a.join(':'); hl = ai + 16; }
   else return { s: 'bad' };
   if (!host) return { s: 'bad' };
@@ -42,7 +42,7 @@ function parseTrojanFirst(data, token) {
   const udp = cmd === 3, at = data[ss + 1];
   let cur = ss + 2, host = '';
   if (at === 1) { if (len < cur + 4) return { s: 'more' }; host = `${data[cur]}.${data[cur+1]}.${data[cur+2]}.${data[cur+3]}`; cur += 4; }
-  else if (at === 3) { if (len < cur + 1) return { s: 'more' }; const dl = data[cur]; if (len < cur + 1 + dl) return { s: 'more' }; host = VLESS_DECODER.decode(data.subarray(cur + 1, cur + 1 + dl)); cur += 1 + dl; }
+  else if (at === 3) { if (len < cur + 1) return { s: 'more' }; const dl = data[cur]; if (len < cur + 1 + dl) return { s: 'more' }; host = XHTTP_DECODER.decode(data.subarray(cur + 1, cur + 1 + dl)); cur += 1 + dl; }
   else if (at === 4) { if (len < cur + 16) return { s: 'more' }; const a = []; for (let i = 0; i < 8; i++) { const b = cur + i * 2; a.push(((data[b] << 8) | data[b + 1]).toString(16)); } host = a.join(':'); cur += 16; }
   else return { s: 'bad' };
   if (!host) return { s: 'bad' };

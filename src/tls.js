@@ -1,4 +1,4 @@
-import { toBytes } from "../utils.js";
+import { toBytes } from "./utils.js";
 ////////////////////////////////////////////TLSClient by: @Alexandre_Kojeve////////////////////////////////////////////////
 const TLS_VERSION_10 = 769, TLS_VERSION_12 = 771, TLS_VERSION_13 = 772;
 const CONTENT_TYPE_CHANGE_CIPHER_SPEC = 20, CONTENT_TYPE_ALERT = 21, CONTENT_TYPE_HANDSHAKE = 22, CONTENT_TYPE_APPLICATION_DATA = 23;
@@ -33,14 +33,6 @@ const tlsBytes = (...parts) => {
 const uint16be = value => [value >> 8 & 255, 255 & value];
 const readUint16 = (buffer, offset) => buffer[offset] << 8 | buffer[offset + 1];
 const readUint24 = (buffer, offset) => buffer[offset] << 16 | buffer[offset + 1] << 8 | buffer[offset + 2];
-const concatBytes = (...chunks) => {
-	const nonEmptyChunks = chunks.filter((chunk => chunk && chunk.length > 0)),
-		length = nonEmptyChunks.reduce(((total, chunk) => total + chunk.length), 0),
-		result = new Uint8Array(length);
-	let offset = 0;
-	for (const chunk of nonEmptyChunks) result.set(chunk, offset), offset += chunk.length;
-	return result
-};
 const randomBytes = length => crypto.getRandomValues(new Uint8Array(length));
 const constantTimeEqual = (left, right) => {
 	if (!left || !right || left.length !== right.length) return !1;

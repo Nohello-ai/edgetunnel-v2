@@ -2,7 +2,7 @@
 // 对应原文件: 创建下行Grain发送器 (行 2342-2445)
 
 import { toBytes, wsSend, closeSocketQuietly } from '../utils.js';
-import { DOWNSTREAM_GRAIN_PACKET, DOWNSTREAM_GRAIN_TAIL_THRESHOLD, DOWNSTREAM_GRAIN_SILENCE_MS } from '../config.js';
+import { DOWNSTREAM_GRAIN_PACKET, DOWNSTREAM_GRAIN_TAIL_THRESHOLD, DOWNSTREAM_GRAIN_SILENCE_MS } from '../context.js';
 
 export function createGrainSender(webSocket, headerData = null) {
   const packetCap = DOWNSTREAM_GRAIN_PACKET;

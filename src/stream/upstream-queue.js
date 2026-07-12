@@ -2,7 +2,7 @@
 // 对应原文件: 创建上行写入队列 (行 2158-2340)
 
 import { toBytes } from '../utils.js';
-import { UPSTREAM_BUNDLE_TARGET, UPSTREAM_QUEUE_MAX_BYTES, UPSTREAM_QUEUE_MAX_ITEMS } from '../config.js';
+import { UPSTREAM_BUNDLE_TARGET, UPSTREAM_QUEUE_MAX_BYTES, UPSTREAM_QUEUE_MAX_ITEMS } from '../context.js';
 
 export function createUpstreamQueue({ getWriter, releaseWriter, retryConnect, closeConnection, name = 'upstream' }) {
   let chunks = [];

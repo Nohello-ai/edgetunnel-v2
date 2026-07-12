@@ -1,6 +1,6 @@
 // transport/ws.js — WebSocket transport (extracted from original lines 1087-1558)
 import { toBytes, dataLength, concatBytes, sha224str, log, closeSocketQuietly, wsSend } from "../utils.js";
-import { WS_EARLY_DATA_MAX_BYTES, WS_EARLY_DATA_MAX_HEADER_LEN, UPSTREAM_QUEUE_MAX_BYTES, UPSTREAM_QUEUE_MAX_ITEMS } from "../config.js";
+import { WS_EARLY_DATA_MAX_BYTES, WS_EARLY_DATA_MAX_HEADER_LEN, UPSTREAM_QUEUE_MAX_BYTES, UPSTREAM_QUEUE_MAX_ITEMS } from "../context.js";
 import { createUpstreamQueue } from "../stream/upstream-queue.js";
 import { parseTrojan } from "../protocol/trojan.js";
 import { parseVLESS } from "../protocol/vless.js";

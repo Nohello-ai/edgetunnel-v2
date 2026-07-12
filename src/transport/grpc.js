@@ -1,7 +1,7 @@
 // transport/grpc.js — gRPC 传输处理（原版提取，行 838-1085）
 
 import { toBytes, dataLength, log } from '../utils.js';
-import { DOWNSTREAM_GRAIN_PACKET, DOWNSTREAM_GRAIN_SILENCE_MS } from '../config.js';
+import { DOWNSTREAM_GRAIN_PACKET, DOWNSTREAM_GRAIN_SILENCE_MS } from '../context.js';
 import { createUpstreamQueue } from '../stream/upstream-queue.js';
 import { parseTrojan } from '../protocol/trojan.js';
 import { parseVLESS } from '../protocol/vless.js';

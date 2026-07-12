@@ -4881,26 +4881,34 @@ async function logRequest(env, request, ip, type, cfg, writeKV = true) {
 // ====== _worker.js ======
 // _worker.js — edgetunnel v2 入口
 // 设计：极简入口，所有逻辑委托给 router 和 context
+// 格式：Service Worker（兼容 Workers + Pages）
 
-export default {
-  async fetch(request, env, ctx) {
-    try {
-      // 1. URL 清洗（对齐原版）
-      const url = cleanUrl(request.url);
+// 核心处理函数
+async function handleFetch(request, env, ctx) {
+  try {
+    const url = cleanUrl(request.url);
+    const ctx_ = createRequestContext(request, env, url);
+    return await routeRequest(request, env, ctx, url, ctx_);
+  } catch (e) {
+    return new Response('Worker Error: ' + (e?.message || e?.stack || String(e)), {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+}
 
-      // 2. 构建请求上下文（线程安全，替代全局变量）
-      const ctx_ = createRequestContext(request, env, url);
-
-      // 3. 路由分发
-      return await routeRequest(request, env, ctx, url, ctx_);
-    } catch (e) {
-      return new Response('Worker Error: ' + (e?.message || e?.stack || String(e)), {
-        status: 500,
-        headers: { 'Content-Type': 'text/plain' },
-      });
+// Service Worker 入口（Workers 默认格式）
+addEventListener('fetch', event => {
+  // Cloudflare Workers Service Worker 格式中，env 绑定通过 globalThis 暴露
+  // 用 Proxy 做兼容，让所有 env.XXX 访问自动落到 globalThis.XXX
+  const env = new Proxy({}, {
+    get(_target, prop) {
+      return globalThis[prop];
     }
-  },
-};
+  });
+  const ctx = { waitUntil: event.waitUntil?.bind(event), passThroughOnException: event.passThroughOnException?.bind(event) };
+  event.respondWith(handleFetch(event.request, env, ctx));
+});
 
 // ---- URL 清洗（对齐原版 行 20-27） ----
 function cleanUrl(raw) {

@@ -1,0 +1,71 @@
+name: Deploy & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号 (如 v1.0.1)'
+        required: true
+        default: ''
+      deploy_only:
+        description: '仅部署不发布'
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy _worker.bundle.js
+
+      - name: Notify deploy success
+        run: echo "✅ Deployed to Cloudflare Workers"
+
+  release:
+    if: ${{ !inputs.deploy_only }}
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          body: |
+            ## edgetunnel v2 — ${{ inputs.version }}
+
+            - 模块化重构版本（29 模块 → 单文件 bundle）
+            - 包含 `_worker.bundle.js` 可直接部署到 Cloudflare Workers
+            - 本版本由 GitHub Actions 自动构建并部署
+
+            ### 部署方式
+            1. Dashboard 直接粘贴 `_worker.bundle.js`
+            2. Wrangler CLI: `npx wrangler deploy _worker.bundle.js`
+
+            ### 环境变量
+            | 变量 | 说明 |
+            |------|------|
+            | `UUID` / `ADMIN` / `PASSWORD` | 管理员密码 |
+            | `HOST` | 自定义域名 |
+            | `PROXYIP` | 反代IP |
+            | `KV` | KV 命名空间绑定 |
+          files: _worker.bundle.js
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

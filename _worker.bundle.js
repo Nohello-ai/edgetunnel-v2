@@ -378,7 +378,6 @@ async function generateUserID(env, adminPassword, secretKey) {
   const envUUID = env.UUID || env.uuid;
   if (envUUID && uuidRegex.test(envUUID)) return envUUID.toLowerCase();
 
-  // [bundle] dynamic import removed;
   const hash = await md5md5(adminPassword + secretKey);
   return [
     hash.slice(0, 8),

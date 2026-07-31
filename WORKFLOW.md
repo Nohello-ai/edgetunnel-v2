@@ -1,34 +1,39 @@
-# 单文件部署工作流
+# 单文件版本工作流
 
-这个工作流的目标很简单：把 `src/` 下的多文件实现打包成一个可直接部署的 `_worker.js`。
+目标：把 `src/` 的多文件实现打成一个 `_worker.js`，并把这个产物当作版本发布。
 
-## 输入
+## 版本规则
 
-- `src/index.js` 作为主入口
-- `src/` 下的所有依赖模块
+- 初始版本固定为 `3.0.0`
+- 每次有实质改动时，按语义版本继续往上加
+- 版本号写在 `package.json`
+- 打包产物 `_worker.js` 顶部保留版本标记
 
-## 输出
+## 工作流模板
 
-- `_worker.js`：单个 ESM 文件，适合直接部署到 Cloudflare Workers 之类的运行环境
+```text
+1. 确认当前版本号。
+2. 修改 `src/` 下的源码。
+3. 如需发布新版本，更新 `package.json` 的 `version`。
+4. 执行 `npm run bundle`。
+5. 获取单文件产物 `_worker.js`。
+6. 上传 `_worker.js` 到目标云端环境。
+```
 
-## 执行步骤
+## 固定入口
 
-1. 安装依赖。
+- 输入入口：`src/index.js`
+- 依赖来源：`src/` 下所有模块
+- 输出文件：`_worker.js`
 
-2. 执行打包。
+## 执行命令
 
-   ```bash
-   npm run bundle
-   ```
+```bash
+npm run bundle
+```
 
-   这一步会调用 `scripts/build-single.mjs`，内部使用 `esbuild` 将 `src/index.js` 及其依赖全部打进 `_worker.js`。
+## 产物约定
 
-3. 部署 `_worker.js`。
-
-   你可以把这个文件直接作为 Worker 主体上传，不需要再带整棵 `src/` 目录。
-
-## 约束
-
-- 入口始终是 `src/index.js`
-- 输出始终是 `_worker.js`
-- 如果你改了源码，就重新执行一次 `npm run bundle`
+- `_worker.js` 是唯一需要上传的文件
+- 不需要连同 `src/` 一起上传
+- 每次改源码后重新打包，保证版本和产物一致

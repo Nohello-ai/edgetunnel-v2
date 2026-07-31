@@ -1,3 +1,4 @@
+// edgetunnel-v4-core 3.0.0
 // src/config/loader.js
 async function getUser(env, userID) {
   return env.DB.prepare("SELECT * FROM users WHERE user_id = ?").bind(userID).first().then(rowToUser);
@@ -173,6 +174,8 @@ var DEFAULT_TRANSPORT = "websocket";
 var DEFAULT_PROTOCOL = "vless";
 var TRANSPORTS = /* @__PURE__ */ new Set(["websocket", "grpc", "xhttp"]);
 var PROTOCOLS = /* @__PURE__ */ new Set(["vless", "trojan", "shadowsocks"]);
+var DEFAULT_ECH_DNS = "https://odvr.nic.cz/doh";
+var DEFAULT_ECH_SNI = "cloudflare-ech.com";
 function normalizeUserConfig(input, fallback = {}) {
   const config = input && typeof input === "object" ? input : {};
   const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -189,11 +192,21 @@ function normalizeUserConfig(input, fallback = {}) {
 }
 function normalizeGlobalConfig(input, fallback = {}) {
   const config = input && typeof input === "object" ? input : {};
+  const hosts = normalizeHosts(config.HOSTS ?? fallback.HOSTS ?? [fallback.siteName || "edgetunnel"]);
+  const proxyGroup = normalizeProxyGroup(config.\u53CD\u4EE3 ?? fallback.\u53CD\u4EE3);
+  const nodeGroup = normalizeNodeGroup(config.\u8282\u70B9\u53C2\u6570 ?? fallback.\u8282\u70B9\u53C2\u6570);
   return {
     ...fallback,
     siteName: String(config.siteName || fallback.siteName || "edgetunnel"),
     transport: normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT),
     protocol: normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL),
+    HOST: String(config.HOST || fallback.HOST || hosts[0] || "edgetunnel"),
+    HOSTS: hosts,
+    \u8BA2\u9605\u53C2\u6570: String(config.\u8BA2\u9605\u53C2\u6570 ?? fallback.\u8BA2\u9605\u53C2\u6570 ?? ""),
+    \u53CD\u4EE3: proxyGroup,
+    \u8282\u70B9\u53C2\u6570: nodeGroup,
+    ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
+    ECHConfig: normalizeECHConfig(config.ECHConfig, fallback.ECHConfig),
     settings: normalizeObject(config.settings ?? fallback.settings),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -211,6 +224,71 @@ function normalizeEnum(value, allowed, fallback) {
 }
 function normalizeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function normalizeHosts(value) {
+  const items = Array.isArray(value) ? value : [value];
+  const hosts = items.flatMap((item) => String(item || "").split(/[\n,，]/g)).map((item) => item.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].split(":")[0]).filter(Boolean);
+  return hosts.length ? [...new Set(hosts)] : ["edgetunnel"];
+}
+function normalizeProxyGroup(value) {
+  const config = normalizeObject(value);
+  return {
+    PROXYIP: String(config.PROXYIP || "auto"),
+    SOCKS5: normalizeSocks5Config(config.SOCKS5)
+  };
+}
+function normalizeNodeGroup(value) {
+  const config = normalizeObject(value);
+  return {
+    Fingerprint: normalizeFingerprint(config.Fingerprint),
+    \u968F\u673A\u8DEF\u5F84: Boolean(config.\u968F\u673A\u8DEF\u5F84 ?? false),
+    \u542F\u75280RTT: Boolean(config.\u542F\u75280RTT ?? false),
+    TLS\u5206\u7247: normalizeTlsFragment(config.TLS\u5206\u7247)
+  };
+}
+function normalizeFingerprint(value) {
+  const text = String(value || "").trim();
+  return text || "chrome";
+}
+function normalizeTlsFragment(value) {
+  const text = String(value || "").trim();
+  return text || null;
+}
+function normalizeSocks5Config(value) {
+  const config = normalizeObject(value);
+  return {
+    \u542F\u7528: config.\u542F\u7528 ?? null,
+    \u5168\u5C40: Boolean(config.\u5168\u5C40 ?? false),
+    \u8D26\u53F7: String(config.\u8D26\u53F7 || ""),
+    \u767D\u540D\u5355: Array.isArray(config.\u767D\u540D\u5355) ? config.\u767D\u540D\u5355.map((item) => String(item || "").trim()).filter(Boolean) : []
+  };
+}
+function normalizeECHConfig(value, fallback = {}) {
+  const config = normalizeObject(value);
+  const normalizedDNS = normalizeECHDNS(config.dns ?? config.DNS ?? fallback.dns ?? fallback.DNS);
+  const normalizedDomain = normalizeECHDomain(config.domain ?? config.DNS ?? config.sni ?? config.SNI ?? fallback.domain ?? fallback.DNS ?? fallback.sni ?? fallback.SNI);
+  return {
+    dns: normalizedDNS,
+    domain: normalizedDomain,
+    dnsService: normalizedDNS,
+    sni: normalizedDomain,
+    DNS: normalizedDNS,
+    SNI: normalizedDomain
+  };
+}
+function normalizeECHDNS(value) {
+  const text = String(value || "").trim();
+  return text || DEFAULT_ECH_DNS;
+}
+function normalizeECHDomain(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return DEFAULT_ECH_SNI;
+  }
+  if (text === "0") {
+    return "0";
+  }
+  return text;
 }
 
 // src/utils/crypto.js
@@ -667,27 +745,37 @@ function requireSelfOrAdmin(auth, userID) {
 function buildSubscriptionNode(url, user, config) {
   const protocol = config.protocol;
   const transport = config.transport;
-  const path = buildTransportPath(transport, user.userID);
-  const host = url.host;
-  const params = new URLSearchParams({
+  const host = pickHost(url.host, config.HOSTS);
+  const path = buildTransportPath(transport, user.userID, config);
+  const baseParams = new URLSearchParams({
     type: transport,
     path
   });
-  const echParams = buildECHParams(config, host);
-  if (echParams) {
-    params.set("ech", echParams);
+  const customParams = parseCustomParams(config.\u8BA2\u9605\u53C2\u6570);
+  const params = new URLSearchParams(baseParams);
+  for (const [key, value] of customParams) {
+    params.set(key, value);
   }
+  const echParams = buildECHParams(config, host);
+  if (echParams && !params.has("ech")) params.set("ech", echParams);
+  if (config.Fingerprint) params.set("fp", config.Fingerprint);
+  if (!params.has("host")) params.set("host", host);
+  if (!params.has("sni")) params.set("sni", host);
+  if (config["\u542F\u75280RTT"] || config["0RTT"]) params.set("ed", "2560");
+  const fragment = normalizeFragment(config.TLS\u5206\u7247);
+  if (fragment) params.set("fragment", fragment);
   const name = encodeURIComponent(user.username);
   if (protocol === "trojan") {
     return `trojan://${sha224Text(user.userID)}@${url.host}:443?${params.toString()}#${name}`;
   }
   return `${protocol}://${user.userID}@${url.host}:443?${params.toString()}#${name}`;
 }
-function buildTransportPath(transport, userID) {
+function buildTransportPath(transport, userID, config) {
   const encodedUserID = encodeURIComponent(userID);
-  if (transport === "grpc") return `/grpc/${encodedUserID}`;
-  if (transport === "websocket") return `/ws/${encodedUserID}`;
-  return `/xhttp/${encodedUserID}`;
+  const randomSuffix = config["\u968F\u673A\u8DEF\u5F84"] ? `/${Math.random().toString(36).slice(2, 10)}` : "";
+  if (transport === "grpc") return `/grpc/${encodedUserID}${randomSuffix}`;
+  if (transport === "websocket") return `/ws/${encodedUserID}${randomSuffix}`;
+  return `/xhttp/${encodedUserID}${randomSuffix}`;
 }
 function buildECHParams(config, host) {
   if (!config?.ECH) return "";
@@ -695,8 +783,34 @@ function buildECHParams(config, host) {
   const dns = String(echConfig.dns || echConfig.DNS || "").trim();
   const domainRaw = echConfig.domain ?? echConfig.sni ?? echConfig.SNI ?? "";
   const domain = String(domainRaw).trim();
-  const target = domain === "0" ? `${host}+${dns}` : (domain ? `${domain}+${dns}` : dns);
+  const target = domain === "0" ? `${host}+${dns}` : domain ? `${domain}+${dns}` : dns;
   return target ? encodeURIComponent(target) : "";
+}
+function normalizeFragment(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text === "Shadowrocket") return "1,40-60,30-50,tlshello";
+  if (text === "Happ") return "3,1,tlshello";
+  return text;
+}
+function pickHost(primaryHost, hosts = []) {
+  const list = Array.isArray(hosts) && hosts.length ? hosts : [primaryHost];
+  return list[Math.floor(Math.random() * list.length)] || primaryHost;
+}
+function parseCustomParams(input) {
+  const text = String(input || "").trim();
+  const params = new URLSearchParams();
+  if (!text) return params;
+  const normalized = text.replace(/^\?/, "");
+  for (const part of normalized.split("&")) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    const key = rawKey.trim();
+    if (!key) continue;
+    const value = rest.join("=");
+    params.set(key, value);
+  }
+  return params;
 }
 function pickOwnUserUpdate(body) {
   const allowed = /* @__PURE__ */ new Set(["password"]);
@@ -899,9 +1013,19 @@ function parseTrojanPacket(packet, session) {
       isUDP: command === TROJAN_CMD_UDP,
       payload: packet.subarray(address.offset + 4),
       responseHeader: null,
-      originalPacket: packet
+      originalPacket: packet,
+      udpHeader: buildTrojanUdpHeader(address.addressType, address.hostname, port)
     }
   };
+}
+function buildTrojanUdpHeader(addressType, hostname, port) {
+  const header = [addressType];
+  if (addressType === 3) {
+    const domain = new TextEncoder().encode(String(hostname));
+    header.push(domain.byteLength, ...domain);
+  }
+  header.push(port >>> 8 & 255, port & 255, 0, 0, 13, 10);
+  return new Uint8Array(header);
 }
 function constantTimeEqual(left, right) {
   if (left.length !== right.length) return false;
@@ -940,9 +1064,23 @@ function parseVlessPacket(packet, session) {
       isUDP: command === VLESS_CMD_UDP,
       payload: packet.subarray(address.offset),
       responseHeader: new Uint8Array([version, 0]),
-      originalPacket: null
+      originalPacket: null,
+      udpHeader: buildVlessUdpHeader(packet, address.offset, address.addressType, port, address.hostname)
     }
   };
+}
+function buildVlessUdpHeader(packet, payloadOffset, addressType, port, hostname) {
+  if (packet[0] === void 0) return new Uint8Array(0);
+  const header = [];
+  header.push(addressType);
+  if (addressType === 2) {
+    const domain = new TextEncoder().encode(String(hostname));
+    header.push(domain.byteLength);
+    header.push(...domain);
+  } else if (addressType === 1 || addressType === 3) {
+  }
+  header.push(port >>> 8 & 255, port & 255, 0, 0, 13, 10);
+  return new Uint8Array(header);
 }
 function uuidBytesMatch(data, offset, uuid) {
   const expected = uuidToBytes(uuid);
@@ -1100,6 +1238,41 @@ function normalizeRuntimeConfig(config = {}) {
   };
 }
 
+// src/stream/bridge.js
+function createStreamBridge(controller) {
+  let closed = false;
+  return {
+    get closed() {
+      return closed;
+    },
+    send(value) {
+      if (closed) return false;
+      try {
+        controller.enqueue(toUint8Array3(value));
+        return true;
+      } catch {
+        closed = true;
+        return false;
+      }
+    },
+    close(error) {
+      if (closed) return;
+      closed = true;
+      try {
+        if (error) controller.error(error);
+        else controller.close();
+      } catch {
+      }
+    }
+  };
+}
+function toUint8Array3(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array(value || 0);
+}
+
 // src/stream/forward.js
 async function forwardTcpSession({ firstPacket, reader, bridge, connectTcp }) {
   const socket = connectTcp({ hostname: firstPacket.hostname, port: firstPacket.port });
@@ -1116,7 +1289,7 @@ async function forwardTcpSession({ firstPacket, reader, bridge, connectTcp }) {
     while (!bridge.closed) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = toUint8Array3(value);
+      const chunk = toUint8Array4(value);
       if (chunk.byteLength === 0) continue;
       await remoteWriter.write(chunk);
     }
@@ -1163,10 +1336,332 @@ function closeSocket(socket) {
   } catch {
   }
 }
-function toUint8Array3(value) {
+function toUint8Array4(value) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array(value || 0);
+}
+
+// src/stream/udp.js
+async function handleUdpSession({ firstPacket, bridge, connectTcp, session }) {
+  if (!firstPacket?.isUDP) {
+    throw new Error("packet is not UDP");
+  }
+  if (firstPacket.protocol === "trojan") {
+    return handleTrojanUdp({ firstPacket, bridge, connectTcp, session });
+  }
+  if (firstPacket.port !== 53) {
+    throw new Error("UDP is not supported");
+  }
+  await forwardDnsOverTcp({
+    payload: firstPacket.payload,
+    bridge,
+    connectTcp,
+    targetHost: getUdpDnsHost(session, firstPacket),
+    targetPort: getUdpDnsPort(session, firstPacket),
+    responseHeader: firstPacket.responseHeader
+  });
+}
+async function handleTrojanUdp({ firstPacket, bridge, connectTcp, session }) {
+  if (firstPacket.port !== 53) {
+    throw new Error("UDP is not supported");
+  }
+  const udpContext = {
+    buffer: firstPacket.payload,
+    targetHost: firstPacket.hostname,
+    targetPort: firstPacket.port,
+    proxyAddress: session?.config?.proxyAddress || null
+  };
+  if (!udpContext.targetHost) {
+    throw new Error("UDP is not supported");
+  }
+  await forwardDnsOverTcp({
+    payload: udpContext.buffer,
+    bridge,
+    connectTcp,
+    targetHost: udpContext.proxyAddress || udpContext.targetHost,
+    targetPort: udpContext.targetPort,
+    responseHeader: null
+  });
+}
+async function forwardDnsOverTcp({ payload, bridge, connectTcp, targetHost, targetPort, responseHeader }) {
+  const socket = connectTcp({ hostname: targetHost, port: targetPort });
+  let writer;
+  let reader;
+  try {
+    if (socket.opened) await socket.opened;
+    writer = socket.writable.getWriter();
+    await writer.write(frameDnsQuery(payload));
+    try {
+      writer.releaseLock();
+    } catch {
+    }
+    writer = null;
+    reader = socket.readable.getReader();
+    const response = await readDnsResponse(reader);
+    if (!response || !response.byteLength) return;
+    if (responseHeader?.byteLength) {
+      bridge.send(responseHeader);
+    }
+    bridge.send(response);
+  } finally {
+    try {
+      reader?.releaseLock();
+    } catch {
+    }
+    try {
+      writer?.releaseLock();
+    } catch {
+    }
+    try {
+      socket.close();
+    } catch {
+    }
+  }
+}
+async function readDnsResponse(reader) {
+  const header = await readExactBytes(reader, 2);
+  if (!header) return null;
+  const length = header[0] << 8 | header[1];
+  if (length <= 0) return null;
+  const payload = await readExactBytes(reader, length);
+  if (!payload || payload.byteLength !== length) return null;
+  const response = new Uint8Array(2 + payload.byteLength);
+  response.set(header, 0);
+  response.set(payload, 2);
+  return response;
+}
+async function readExactBytes(reader, expectedLength) {
+  const chunks = [];
+  let total = 0;
+  while (total < expectedLength) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = toUint8Array5(value);
+    if (!chunk.byteLength) continue;
+    chunks.push(chunk);
+    total += chunk.byteLength;
+  }
+  if (total === 0) return null;
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (merged.byteLength <= expectedLength) return merged;
+  return merged.slice(0, expectedLength);
+}
+function frameDnsQuery(payload) {
+  const data = toUint8Array5(payload);
+  const framed = new Uint8Array(data.byteLength + 2);
+  framed[0] = data.byteLength >>> 8 & 255;
+  framed[1] = data.byteLength & 255;
+  framed.set(data, 2);
+  return framed;
+}
+function getUdpDnsHost(session, firstPacket) {
+  const udpConfig = session?.config?.udp && typeof session.config.udp === "object" ? session.config.udp : {};
+  return udpConfig.dnsHost || firstPacket.hostname || "8.8.4.4";
+}
+function getUdpDnsPort(session, firstPacket) {
+  const udpConfig = session?.config?.udp && typeof session.config.udp === "object" ? session.config.udp : {};
+  return Number(udpConfig.dnsPort || firstPacket.port || 53);
+}
+function toUint8Array5(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  return new Uint8Array(value || 0);
+}
+
+// src/transport/grpc.js
+var GRPC_RESPONSE_HEADERS = {
+  "content-type": "application/grpc",
+  "grpc-status": "0",
+  "cache-control": "no-store",
+  "x-accel-buffering": "no"
+};
+async function handleGrpcRequest(request, env, ctx, options = {}) {
+  if (!request.body) {
+    return new Response("Bad Request", { status: 400 });
+  }
+  const session = await resolveDataFlowSession(request, env);
+  if (!session.ok) return session.response;
+  if (session.transport !== "grpc") {
+    return new Response("Transport is not enabled for this user", { status: 403 });
+  }
+  const reader = request.body.getReader();
+  let firstFrame;
+  try {
+    firstFrame = await readGrpcFrame(reader);
+  } catch (error) {
+    releaseReader(reader);
+    return new Response(error?.message || "Invalid request", { status: 400 });
+  }
+  if (!firstFrame) {
+    releaseReader(reader);
+    return new Response("Invalid request", { status: 400 });
+  }
+  const packetReader = createGrpcPayloadReader(reader, firstFrame.remainder);
+  let firstPacket;
+  try {
+    firstPacket = await readFirstProxyPacket(packetReader, session, options);
+  } catch (error) {
+    releaseReader(reader);
+    return new Response(error?.message || "Invalid request", { status: 400 });
+  }
+  if (!firstPacket) {
+    releaseReader(reader);
+    return new Response("Invalid request", { status: 400 });
+  }
+  if (firstPacket.isUDP && firstPacket.port !== 53) {
+    releaseReader(reader);
+    return new Response("UDP is not supported", { status: 400 });
+  }
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const bridge = createGrpcBridge(createStreamBridge(controller));
+      try {
+        await runGrpcSession({
+          request,
+          session,
+          reader: packetReader,
+          firstPacket,
+          bridge
+        });
+      } catch (error) {
+        bridge.close(error);
+      } finally {
+        releaseReader(reader);
+        bridge.close();
+      }
+    },
+    cancel() {
+      cancelReader(reader);
+    }
+  }), {
+    status: 200,
+    headers: GRPC_RESPONSE_HEADERS
+  });
+}
+async function runGrpcSession({ request, session, reader, firstPacket, bridge }) {
+  await writeProtocolResponseHeader(firstPacket, bridge);
+  if (firstPacket.isUDP) {
+    await handleUdpSession({
+      firstPacket,
+      bridge,
+      connectTcp: createTcpConnector(request),
+      session
+    });
+    return;
+  }
+  await forwardTcpSession({
+    firstPacket,
+    reader,
+    bridge,
+    connectTcp: createTcpConnector(request)
+  });
+}
+async function readGrpcFrame(reader) {
+  const header = await readExact(reader, 5);
+  if (!header) return null;
+  if (header[0] !== 0) throw new Error("gRPC compression is not supported");
+  const payloadLength = new DataView(header.buffer, header.byteOffset, 5).getUint32(1);
+  if (payloadLength === 0) {
+    return { payload: new Uint8Array(0), remainder: new Uint8Array(0) };
+  }
+  const payload = await readExact(reader, payloadLength);
+  if (!payload) throw new Error("Truncated gRPC frame");
+  return { payload, remainder: new Uint8Array(0) };
+}
+async function readExact(reader, size) {
+  if (size === 0) return new Uint8Array(0);
+  const chunks = [];
+  let total = 0;
+  while (total < size) {
+    const { done, value } = await reader.read();
+    if (done) return null;
+    const chunk = toUint8Array6(value);
+    if (!chunk.byteLength) continue;
+    chunks.push(chunk);
+    total += chunk.byteLength;
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged.length > size ? merged.slice(0, size) : merged;
+}
+function createGrpcPayloadReader(reader, initialPayload) {
+  let initial = toUint8Array6(initialPayload);
+  return {
+    async read() {
+      if (initial && initial.byteLength > 0) {
+        const value = initial;
+        initial = new Uint8Array(0);
+        return { done: false, value };
+      }
+      return reader.read();
+    },
+    releaseLock() {
+      try {
+        reader.releaseLock();
+      } catch {
+      }
+    }
+  };
+}
+function createGrpcBridge(baseBridge) {
+  return {
+    get closed() {
+      return baseBridge.closed;
+    },
+    send(value) {
+      const chunk = toUint8Array6(value);
+      if (!chunk.byteLength) return false;
+      const framed = new Uint8Array(5 + chunk.byteLength);
+      framed[0] = 0;
+      framed[1] = chunk.byteLength >>> 24 & 255;
+      framed[2] = chunk.byteLength >>> 16 & 255;
+      framed[3] = chunk.byteLength >>> 8 & 255;
+      framed[4] = chunk.byteLength & 255;
+      framed.set(chunk, 5);
+      return baseBridge.send(framed);
+    },
+    close(error) {
+      baseBridge.close(error);
+    }
+  };
+}
+async function writeProtocolResponseHeader(firstPacket, bridge) {
+  if (firstPacket.responseHeader?.byteLength) {
+    bridge.send(firstPacket.responseHeader);
+  }
+}
+function releaseReader(reader) {
+  try {
+    reader.releaseLock();
+  } catch {
+  }
+}
+function cancelReader(reader) {
+  try {
+    const cancelled = reader.cancel();
+    if (cancelled?.catch) cancelled.catch(() => {
+    });
+  } catch {
+  }
+}
+function toUint8Array6(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (typeof value === "string") return new TextEncoder().encode(value);
   return new Uint8Array(value || 0);
 }
 
@@ -1240,7 +1735,7 @@ async function handleWebSocketRequest(request, env, ctx, options = {}) {
   bridge = createWebSocketBridge(server);
   queueMicrotask(async () => {
     try {
-      await runWebSocketSession({ request, firstPacket, bridge, inboundQueue, reader: firstPacketReader, queueReader: inboundReader });
+      await runWebSocketSession({ request, session, firstPacket, bridge, inboundQueue, reader: firstPacketReader, queueReader: inboundReader });
     } catch (error) {
       bridge.close(error);
     } finally {
@@ -1258,10 +1753,17 @@ async function handleWebSocketRequest(request, env, ctx, options = {}) {
     headers: WS_RESPONSE_HEADERS
   });
 }
-async function runWebSocketSession({ request, firstPacket, bridge, inboundQueue, reader, queueReader }) {
-  await writeProtocolResponseHeader(firstPacket, bridge);
+async function runWebSocketSession({ request, session, firstPacket, bridge, inboundQueue, reader, queueReader }) {
+  await writeProtocolResponseHeader2(firstPacket, bridge);
   if (firstPacket.isUDP) {
-    throw new Error("UDP outbound is not implemented yet");
+    await handleUdpSession({
+      firstPacket,
+      bridge,
+      connectTcp: createTcpConnector(request),
+      request,
+      session
+    });
+    return;
   }
   const combinedReader = createCombinedReader(reader, queueReader);
   await forwardTcpSession({
@@ -1271,7 +1773,7 @@ async function runWebSocketSession({ request, firstPacket, bridge, inboundQueue,
     connectTcp: createTcpConnector(request)
   });
 }
-async function writeProtocolResponseHeader(firstPacket, bridge) {
+async function writeProtocolResponseHeader2(firstPacket, bridge) {
   if (firstPacket.responseHeader?.byteLength) {
     bridge.send(firstPacket.responseHeader);
   }
@@ -1285,7 +1787,7 @@ function createWebSocketBridge(socket) {
     send(value) {
       if (closed) return false;
       try {
-        socket.send(toUint8Array4(value));
+        socket.send(toUint8Array7(value));
         return true;
       } catch {
         closed = true;
@@ -1313,7 +1815,7 @@ function createWebSocketChunkQueue() {
   return {
     push(value) {
       if (closed) return;
-      const chunk = toUint8Array4(value);
+      const chunk = toUint8Array7(value);
       if (chunk.byteLength === 0) return;
       if (waiters.length > 0) {
         const waiter = waiters.shift();
@@ -1366,46 +1868,11 @@ function createCombinedReader(initialReader, queueReader) {
     }
   };
 }
-function toUint8Array4(value) {
+function toUint8Array7(value) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   if (typeof value === "string") return new TextEncoder().encode(value);
-  return new Uint8Array(value || 0);
-}
-
-// src/stream/bridge.js
-function createStreamBridge(controller) {
-  let closed = false;
-  return {
-    get closed() {
-      return closed;
-    },
-    send(value) {
-      if (closed) return false;
-      try {
-        controller.enqueue(toUint8Array5(value));
-        return true;
-      } catch {
-        closed = true;
-        return false;
-      }
-    },
-    close(error) {
-      if (closed) return;
-      closed = true;
-      try {
-        if (error) controller.error(error);
-        else controller.close();
-      } catch {
-      }
-    }
-  };
-}
-function toUint8Array5(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   return new Uint8Array(value || 0);
 }
 
@@ -1429,15 +1896,15 @@ async function handleXhttpRequest(request, env, ctx, options = {}) {
   try {
     firstPacket = await readFirstProxyPacket(reader, session, options);
   } catch (error) {
-    releaseReader(reader);
+    releaseReader2(reader);
     return new Response(error?.message || "Invalid request", { status: 400 });
   }
   if (!firstPacket) {
-    releaseReader(reader);
+    releaseReader2(reader);
     return new Response("Invalid request", { status: 400 });
   }
   if (firstPacket.isUDP && firstPacket.protocol !== "trojan" && firstPacket.port !== 53) {
-    releaseReader(reader);
+    releaseReader2(reader);
     return new Response("UDP is not supported", { status: 400 });
   }
   return new Response(new ReadableStream({
@@ -1448,6 +1915,7 @@ async function handleXhttpRequest(request, env, ctx, options = {}) {
           request,
           env,
           ctx,
+          session,
           reader,
           firstPacket,
           bridge
@@ -1455,22 +1923,29 @@ async function handleXhttpRequest(request, env, ctx, options = {}) {
       } catch (error) {
         bridge.close(error);
       } finally {
-        releaseReader(reader);
+        releaseReader2(reader);
         bridge.close();
       }
     },
     cancel() {
-      cancelReader(reader);
+      cancelReader2(reader);
     }
   }), {
     status: 200,
     headers: XHTTP_RESPONSE_HEADERS
   });
 }
-async function runXhttpSession({ request, reader, firstPacket, bridge }) {
-  await writeProtocolResponseHeader2(firstPacket, bridge);
+async function runXhttpSession({ request, session, reader, firstPacket, bridge }) {
+  await writeProtocolResponseHeader3(firstPacket, bridge);
   if (firstPacket.isUDP) {
-    throw new Error("UDP outbound is not implemented yet");
+    await handleUdpSession({
+      firstPacket,
+      bridge,
+      connectTcp: createTcpConnector(request),
+      request,
+      session
+    });
+    return;
   }
   await forwardTcpSession({
     firstPacket,
@@ -1479,18 +1954,18 @@ async function runXhttpSession({ request, reader, firstPacket, bridge }) {
     connectTcp: createTcpConnector(request)
   });
 }
-async function writeProtocolResponseHeader2(firstPacket, bridge) {
+async function writeProtocolResponseHeader3(firstPacket, bridge) {
   if (firstPacket.responseHeader?.byteLength) {
     bridge.send(firstPacket.responseHeader);
   }
 }
-function releaseReader(reader) {
+function releaseReader2(reader) {
   try {
     reader.releaseLock();
   } catch {
   }
 }
-function cancelReader(reader) {
+function cancelReader2(reader) {
   try {
     const cancelled = reader.cancel();
     if (cancelled?.catch) cancelled.catch(() => {
@@ -1503,6 +1978,9 @@ function cancelReader(reader) {
 async function handleDataFlowRequest(request, env, ctx) {
   if (isWebSocketRequest(request)) {
     return handleWebSocketRequest(request, env, ctx);
+  }
+  if (isGrpcRequest(request)) {
+    return handleGrpcRequest(request, env, ctx);
   }
   if (isXhttpRequest(request)) {
     return handleXhttpRequest(request, env, ctx);
@@ -1520,6 +1998,10 @@ function isXhttpRequest(request) {
 function isWebSocketRequest(request) {
   const upgrade = request.headers.get("upgrade") || "";
   return upgrade.toLowerCase() === "websocket";
+}
+function isGrpcRequest(request) {
+  const contentType = request.headers.get("content-type") || "";
+  return request.method === "POST" && contentType.includes("application/grpc");
 }
 
 // src/index.js

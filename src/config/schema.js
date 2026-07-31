@@ -1,7 +1,7 @@
 const DEFAULT_TRANSPORT = 'websocket';
 const DEFAULT_PROTOCOL = 'vless';
 const TRANSPORTS = new Set(['websocket', 'grpc', 'xhttp']);
-const PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks']);
+const PROTOCOLS = new Set(['vless', 'trojan']);
 const DEFAULT_ECH_DNS = 'https://odvr.nic.cz/doh';
 const DEFAULT_ECH_SNI = 'cloudflare-ech.com';
 
@@ -27,11 +27,16 @@ export function normalizeGlobalConfig(input, fallback = {}) {
   const proxyGroup = normalizeProxyGroup(config.反代 ?? fallback.反代);
   const nodeGroup = normalizeNodeGroup(config.节点参数 ?? fallback.节点参数);
 
+  const protocol = normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL);
+  const transport = normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT);
+
   return {
     ...fallback,
     siteName: String(config.siteName || fallback.siteName || 'edgetunnel'),
-    transport: normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT),
-    protocol: normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL),
+    transport,
+    transports: normalizeEnums(config.transports ?? fallback.transports ?? [transport], TRANSPORTS, [transport]),
+    protocol,
+    protocols: normalizeEnums(config.protocols ?? fallback.protocols ?? [protocol], PROTOCOLS, [protocol]),
     HOST: String(config.HOST || fallback.HOST || hosts[0] || 'edgetunnel'),
     HOSTS: hosts,
     订阅参数: String(config.订阅参数 ?? fallback.订阅参数 ?? ''),
@@ -56,6 +61,12 @@ export function normalizeBan(input) {
 
 function normalizeEnum(value, allowed, fallback) {
   return allowed.has(value) ? value : fallback;
+}
+
+function normalizeEnums(value, allowed, fallback) {
+  const values = Array.isArray(value) ? value : [value];
+  const normalized = [...new Set(values.filter((item) => allowed.has(item)))];
+  return normalized.length ? normalized : fallback;
 }
 
 function normalizeObject(value) {
@@ -124,7 +135,7 @@ function normalizeSocks5Config(value) {
 function normalizeECHConfig(value, fallback = {}) {
   const config = normalizeObject(value);
   const normalizedDNS = normalizeECHDNS(config.dns ?? config.DNS ?? fallback.dns ?? fallback.DNS);
-  const normalizedDomain = normalizeECHDomain(config.domain ?? config.DNS ?? config.sni ?? config.SNI ?? fallback.domain ?? fallback.DNS ?? fallback.sni ?? fallback.SNI);
+  const normalizedDomain = normalizeECHDomain(config.domain ?? config.sni ?? config.SNI ?? fallback.domain ?? fallback.sni ?? fallback.SNI);
 
   return {
     dns: normalizedDNS,

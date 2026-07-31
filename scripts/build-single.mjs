@@ -20,6 +20,7 @@ const result = spawnSync('npx', [
   '--platform=browser',
   '--target=es2022',
   '--external:cloudflare:sockets',
+  `--define:__EDGETUNNEL_VERSION__=${JSON.stringify(pkg.version)}`,
   `--outfile=${output}`,
 ], {
   cwd: root,
@@ -31,5 +32,5 @@ if (result.status !== 0) {
 }
 
 const bundle = readFileSync(output, 'utf8');
-const banner = `// edgetunnel-v4-core ${pkg.version}\n`;
+const banner = `// edgetunnel-core ${pkg.version}\n`;
 writeFileSync(output, banner + bundle);

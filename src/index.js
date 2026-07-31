@@ -1,53 +1,52 @@
-import { handleApiRequest } from './api/index.js';
-import { handleDataFlowRequest } from './proxy/index.js';
-import { isValidUuidV4 } from './utils/crypto.js';
+import { createAdmissionDependencies } from './admission/repositories.js';
+import { createAdmissionService } from './admission/service.js';
+import { createApiRouter } from './api-v2/router.js';
+import { bootstrapAdmin } from './auth/bootstrap.js';
+import { createSessionService } from './auth/session.js';
+import { createDirectConnector } from './connector/direct.js';
+import { asAppError } from './core/errors.js';
+import { startDataFlowPipeline } from './proxy/pipeline.js';
+import { classifyRequest } from './routes/router.js';
+import { createUsageRepository } from './usage/repository.js';
+import { createUserRepository } from './users/repository.js';
 import { jsonResponse, textResponse } from './utils/http.js';
+
+const VERSION = typeof __EDGETUNNEL_VERSION__ === 'string' ? __EDGETUNNEL_VERSION__ : '3.0.0';
 
 export default {
   async fetch(request, env, ctx) {
-    if (!isValidRuntimeEnv(env)) {
-      return jsonResponse({
-        ok: false,
-        error: 'INVALID_ENV',
-        message: 'ID must be a UUID v4 and DB binding is required',
-      }, 500);
+    if (!env?.DB) return jsonResponse({ ok: false, error: 'DB_BINDING_REQUIRED' }, 500);
+
+    try {
+      const users = createUserRepository(env);
+      await bootstrapAdmin(env, users);
+      const route = classifyRequest(request);
+
+      if (route.kind === 'api') {
+        const sessions = createSessionService(env, users);
+        return createApiRouter({ users, sessions })(request, env);
+      }
+
+      if (route.kind === 'data-flow') {
+        const dependencies = createAdmissionDependencies(env);
+        const session = await createAdmissionService(dependencies).admit(route.dataFlow);
+        return startDataFlowPipeline({
+          request,
+          session,
+          connector: createDirectConnector(request.fetcher?.connect?.bind(request.fetcher)),
+          usageRepository: createUsageRepository(env),
+          ctx,
+        });
+      }
+
+      if (route.kind === 'version') {
+        return jsonResponse({ name: 'edgetunnel-core', version: VERSION });
+      }
+
+      return textResponse(`edgetunnel core ${VERSION} is running`);
+    } catch (error) {
+      const appError = asAppError(error);
+      return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
     }
-
-    const url = new URL(request.url);
-
-    if (isApiRequest(url, request)) {
-      return handleApiRequest(request, env, ctx);
-    }
-
-    if (isDataFlowRequest(request)) {
-      return handleDataFlowRequest(request, env, ctx);
-    }
-
-    return textResponse('edgetunnel core is running', 200);
   },
 };
-
-function isValidRuntimeEnv(env) {
-  return Boolean(env?.DB) && isValidUuidV4(env?.ID);
-}
-
-function isApiRequest(url, request) {
-  if (url.pathname.startsWith('/api/')) return true;
-  if (url.pathname === '/login') return true;
-  if (url.pathname === '/admin') return true;
-  if (url.pathname === '/sub') return true;
-  if (request.headers.get('accept')?.includes('application/json')) return true;
-  return false;
-}
-
-function isDataFlowRequest(request) {
-  const upgrade = request.headers.get('upgrade') || '';
-  const contentType = request.headers.get('content-type') || '';
-
-  if (upgrade.toLowerCase() === 'websocket') return true;
-  if (contentType.includes('application/grpc')) return true;
-  if (contentType.includes('application/x-http')) return true;
-  if (request.method === 'POST' && request.body) return true;
-
-  return false;
-}

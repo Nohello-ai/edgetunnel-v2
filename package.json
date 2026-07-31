@@ -1,12 +1,13 @@
 {
-  "name": "edgetunnel-v4-core",
+  "name": "edgetunnel-core",
   "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build-single.mjs",
     "bundle": "node scripts/build-single.mjs",
-    "check": "node --check src/index.js"
+    "check": "find src test scripts -type f -name '*.js' -exec node --check {} +",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "esbuild": "^0.25.8"

@@ -1,71 +1,5 @@
-// edgetunnel-v4-core 3.0.0
+// edgetunnel-core 3.0.0
 // src/config/loader.js
-async function getUser(env, userID) {
-  return env.DB.prepare("SELECT * FROM users WHERE user_id = ?").bind(userID).first().then(rowToUser);
-}
-async function getUserByUsername(env, username) {
-  return env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(username).first().then(rowToUser);
-}
-async function putUser(env, userID, user) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const record = {
-    userID,
-    username: user.username,
-    password: user.password,
-    disabled: user.disabled ? 1 : 0,
-    settings: JSON.stringify(user.settings || {}),
-    createdAt: user.createdAt || now,
-    updatedAt: user.updatedAt || now
-  };
-  await env.DB.prepare(`
-    INSERT INTO users (user_id, username, password, disabled, settings, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      username = excluded.username,
-      password = excluded.password,
-      disabled = excluded.disabled,
-      settings = excluded.settings,
-      updated_at = excluded.updated_at
-  `).bind(
-    record.userID,
-    record.username,
-    record.password,
-    record.disabled,
-    record.settings,
-    record.createdAt,
-    record.updatedAt
-  ).run();
-  return user;
-}
-async function listUsers(env) {
-  const result = await env.DB.prepare("SELECT * FROM users ORDER BY created_at DESC").all();
-  return (result.results || []).map(rowToUser);
-}
-async function getBan(env, userID) {
-  return env.DB.prepare("SELECT * FROM bans WHERE user_id = ?").bind(userID).first().then(rowToBan);
-}
-async function putBan(env, userID, ban) {
-  await env.DB.prepare(`
-    INSERT INTO bans (user_id, reason, until, created_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      reason = excluded.reason,
-      until = excluded.until,
-      created_at = excluded.created_at
-  `).bind(userID, ban.reason || "", ban.until || null, ban.createdAt).run();
-  return ban;
-}
-async function deleteBan(env, userID) {
-  await env.DB.prepare("DELETE FROM bans WHERE user_id = ?").bind(userID).run();
-}
-async function getUsage(env, userID) {
-  const row = await env.DB.prepare("SELECT * FROM usage WHERE user_id = ?").bind(userID).first();
-  return rowToUsage(row);
-}
-async function listUsage(env) {
-  const result = await env.DB.prepare("SELECT * FROM usage ORDER BY total DESC").all();
-  return (result.results || []).map(rowToUsage);
-}
 async function getGlobalConfig(env) {
   const row = await env.DB.prepare("SELECT value FROM global_config WHERE key = ?").bind("global").first();
   return parseJson(row?.value, {});
@@ -80,86 +14,6 @@ async function putGlobalConfig(env, config) {
   `).bind("global", JSON.stringify(config), (/* @__PURE__ */ new Date()).toISOString()).run();
   return config;
 }
-async function insertNotification(env, notification) {
-  await env.DB.prepare(`
-    INSERT INTO notifications (id, user_id, type, message, read_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(
-    notification.id,
-    notification.targetUserID || null,
-    notification.type,
-    notification.message,
-    notification.readAt || null,
-    notification.createdAt
-  ).run();
-  return notification;
-}
-async function listNotificationsForUser(env, userID) {
-  const result = await env.DB.prepare(`
-    SELECT * FROM notifications
-    WHERE user_id = ? OR user_id IS NULL
-    ORDER BY created_at DESC
-  `).bind(userID).all();
-  return (result.results || []).map(rowToNotification);
-}
-async function countUnreadNotificationsForUser(env, userID) {
-  const row = await env.DB.prepare(`
-    SELECT COUNT(*) AS count FROM notifications
-    WHERE user_id = ? AND read_at IS NULL
-  `).bind(userID).first();
-  return Number(row?.count || 0);
-}
-async function markNotificationReadForUser(env, userID, notificationID) {
-  const readAt = (/* @__PURE__ */ new Date()).toISOString();
-  await env.DB.prepare(`
-    UPDATE notifications SET read_at = ?
-    WHERE id = ? AND user_id = ?
-  `).bind(readAt, notificationID, userID).run();
-  const row = await env.DB.prepare("SELECT * FROM notifications WHERE id = ?").bind(notificationID).first();
-  return rowToNotification(row);
-}
-function rowToUser(row) {
-  if (!row) return null;
-  return {
-    userID: row.user_id,
-    username: row.username,
-    password: row.password,
-    disabled: Boolean(row.disabled),
-    settings: parseJson(row.settings, {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-function rowToBan(row) {
-  if (!row) return null;
-  return {
-    userID: row.user_id,
-    reason: row.reason,
-    until: row.until,
-    createdAt: row.created_at
-  };
-}
-function rowToUsage(row) {
-  if (!row) return { upload: 0, download: 0, total: 0 };
-  return {
-    userID: row.user_id,
-    upload: Number(row.upload || 0),
-    download: Number(row.download || 0),
-    total: Number(row.total || 0),
-    updatedAt: row.updated_at
-  };
-}
-function rowToNotification(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    type: row.type,
-    message: row.message,
-    targetUserID: row.user_id || "",
-    readAt: row.read_at,
-    createdAt: row.created_at
-  };
-}
 function parseJson(value, fallback) {
   if (!value) return fallback;
   try {
@@ -173,33 +27,23 @@ function parseJson(value, fallback) {
 var DEFAULT_TRANSPORT = "websocket";
 var DEFAULT_PROTOCOL = "vless";
 var TRANSPORTS = /* @__PURE__ */ new Set(["websocket", "grpc", "xhttp"]);
-var PROTOCOLS = /* @__PURE__ */ new Set(["vless", "trojan", "shadowsocks"]);
+var PROTOCOLS = /* @__PURE__ */ new Set(["vless", "trojan"]);
 var DEFAULT_ECH_DNS = "https://odvr.nic.cz/doh";
 var DEFAULT_ECH_SNI = "cloudflare-ech.com";
-function normalizeUserConfig(input, fallback = {}) {
-  const config = input && typeof input === "object" ? input : {};
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  return {
-    ...fallback,
-    userID: String(config.userID || fallback.userID || ""),
-    username: String(config.username || fallback.username || "").trim().toLowerCase(),
-    password: String(config.password || fallback.password || ""),
-    disabled: Boolean(config.disabled ?? fallback.disabled ?? false),
-    settings: normalizeObject(config.settings ?? fallback.settings),
-    createdAt: fallback.createdAt || now,
-    updatedAt: now
-  };
-}
 function normalizeGlobalConfig(input, fallback = {}) {
   const config = input && typeof input === "object" ? input : {};
   const hosts = normalizeHosts(config.HOSTS ?? fallback.HOSTS ?? [fallback.siteName || "edgetunnel"]);
   const proxyGroup = normalizeProxyGroup(config.\u53CD\u4EE3 ?? fallback.\u53CD\u4EE3);
   const nodeGroup = normalizeNodeGroup(config.\u8282\u70B9\u53C2\u6570 ?? fallback.\u8282\u70B9\u53C2\u6570);
+  const protocol = normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL);
+  const transport = normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT);
   return {
     ...fallback,
     siteName: String(config.siteName || fallback.siteName || "edgetunnel"),
-    transport: normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT),
-    protocol: normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL),
+    transport,
+    transports: normalizeEnums(config.transports ?? fallback.transports ?? [transport], TRANSPORTS, [transport]),
+    protocol,
+    protocols: normalizeEnums(config.protocols ?? fallback.protocols ?? [protocol], PROTOCOLS, [protocol]),
     HOST: String(config.HOST || fallback.HOST || hosts[0] || "edgetunnel"),
     HOSTS: hosts,
     \u8BA2\u9605\u53C2\u6570: String(config.\u8BA2\u9605\u53C2\u6570 ?? fallback.\u8BA2\u9605\u53C2\u6570 ?? ""),
@@ -211,16 +55,13 @@ function normalizeGlobalConfig(input, fallback = {}) {
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-function normalizeBan(input) {
-  const ban = input && typeof input === "object" ? input : {};
-  return {
-    reason: String(ban.reason || ""),
-    until: ban.until || null,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
 function normalizeEnum(value, allowed, fallback) {
   return allowed.has(value) ? value : fallback;
+}
+function normalizeEnums(value, allowed, fallback) {
+  const values = Array.isArray(value) ? value : [value];
+  const normalized = [...new Set(values.filter((item) => allowed.has(item)))];
+  return normalized.length ? normalized : fallback;
 }
 function normalizeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -266,7 +107,7 @@ function normalizeSocks5Config(value) {
 function normalizeECHConfig(value, fallback = {}) {
   const config = normalizeObject(value);
   const normalizedDNS = normalizeECHDNS(config.dns ?? config.DNS ?? fallback.dns ?? fallback.DNS);
-  const normalizedDomain = normalizeECHDomain(config.domain ?? config.DNS ?? config.sni ?? config.SNI ?? fallback.domain ?? fallback.DNS ?? fallback.sni ?? fallback.SNI);
+  const normalizedDomain = normalizeECHDomain(config.domain ?? config.sni ?? config.SNI ?? fallback.domain ?? fallback.sni ?? fallback.SNI);
   return {
     dns: normalizedDNS,
     domain: normalizedDomain,
@@ -289,6 +130,182 @@ function normalizeECHDomain(value) {
     return "0";
   }
   return text;
+}
+
+// src/config/runtime.js
+function createRuntimeConfigService(env) {
+  return {
+    async getRuntime() {
+      return normalizeGlobalConfig(await getGlobalConfig(env));
+    }
+  };
+}
+
+// src/usage/repository.js
+function createUsageRepository(env) {
+  return {
+    async get(userID) {
+      const row = await env.DB.prepare("SELECT upload, download, total, updated_at FROM usage WHERE user_id = ?").bind(userID).first();
+      return row ? {
+        upload: Number(row.upload || 0),
+        download: Number(row.download || 0),
+        total: Number(row.total || 0),
+        updatedAt: row.updated_at
+      } : { upload: 0, download: 0, total: 0 };
+    },
+    async increment(userID, upload, download) {
+      const up = Number(upload || 0);
+      const down = Number(download || 0);
+      await env.DB.prepare(`
+        INSERT INTO usage (user_id, upload, download, total, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          upload = usage.upload + excluded.upload,
+          download = usage.download + excluded.download,
+          total = usage.total + excluded.total,
+          updated_at = excluded.updated_at
+      `).bind(userID, up, down, up + down, (/* @__PURE__ */ new Date()).toISOString()).run();
+    }
+  };
+}
+
+// src/users/repository.js
+function createUserRepository(env) {
+  return {
+    async count() {
+      const row = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first();
+      return Number(row?.count || 0);
+    },
+    async getByID(userID) {
+      return mapUser(await env.DB.prepare("SELECT * FROM users WHERE user_id = ?").bind(userID).first());
+    },
+    async getByUsername(username) {
+      return mapUser(await env.DB.prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE").bind(username).first());
+    },
+    async list() {
+      const result = await env.DB.prepare("SELECT * FROM users ORDER BY created_at DESC").all();
+      return (result.results || []).map(mapUser);
+    },
+    async countAdmins() {
+      const row = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled = 0").first();
+      return Number(row?.count || 0);
+    },
+    async create(user) {
+      await env.DB.prepare(`INSERT INTO users (user_id,username,password_hash,role,disabled,quota_bytes,trojan_secret,settings,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(user.userID, user.username, user.passwordHash, user.role, user.disabled ? 1 : 0, user.quotaBytes, user.trojanSecret, JSON.stringify(user.settings || {}), user.createdAt, user.updatedAt).run();
+      return user;
+    },
+    async update(userID, fields) {
+      const columns = {
+        username: ["username", (value) => value],
+        passwordHash: ["password_hash", (value) => value],
+        role: ["role", (value) => value],
+        disabled: ["disabled", (value) => value ? 1 : 0],
+        quotaBytes: ["quota_bytes", (value) => value],
+        trojanSecret: ["trojan_secret", (value) => value],
+        settings: ["settings", (value) => JSON.stringify(value || {})]
+      };
+      const selected = Object.entries(fields).filter(([key]) => columns[key]);
+      if (selected.length === 0) return this.getByID(userID);
+      const assignments = selected.map(([key]) => `${columns[key][0]}=?`);
+      const values = selected.map(([key, value]) => columns[key][1](value));
+      const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const result = await env.DB.prepare(`UPDATE users SET ${assignments.join(",")},updated_at=? WHERE user_id=?`).bind(...values, updatedAt, userID).run();
+      if (Number(result.meta?.changes || 0) === 0) return null;
+      return this.getByID(userID);
+    },
+    async revokeSessions(userID) {
+      await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").bind((/* @__PURE__ */ new Date()).toISOString(), userID).run();
+    },
+    async delete(userID) {
+      await env.DB.prepare("DELETE FROM users WHERE user_id = ?").bind(userID).run();
+    }
+  };
+}
+function publicUser(user) {
+  if (!user) return null;
+  const { passwordHash, subscriptionTokenHash, trojanSecret, ...safe } = user;
+  return safe;
+}
+function mapUser(row) {
+  if (!row) return null;
+  return {
+    userID: row.user_id,
+    username: row.username,
+    passwordHash: row.password_hash,
+    role: row.role,
+    disabled: Boolean(row.disabled),
+    quotaBytes: Number(row.quota_bytes || 0),
+    trojanSecret: row.trojan_secret,
+    subscriptionTokenHash: row.subscription_token_hash,
+    settings: parse(row.settings),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function parse(value) {
+  try {
+    return JSON.parse(value || "{}");
+  } catch {
+    return {};
+  }
+}
+
+// src/admission/repositories.js
+function createAdmissionDependencies(env) {
+  return {
+    users: createUserRepository(env),
+    bans: {
+      async getActive(userID) {
+        const row = await env.DB.prepare("SELECT * FROM bans WHERE user_id = ?").bind(userID).first();
+        if (!row) return null;
+        if (!row.until || Number.isNaN(Date.parse(row.until)) || Date.parse(row.until) > Date.now()) return row;
+        return null;
+      }
+    },
+    usage: createUsageRepository(env),
+    config: createRuntimeConfigService(env)
+  };
+}
+
+// src/core/errors.js
+var AppError = class extends Error {
+  constructor(code, status = 400, message = code) {
+    super(message);
+    this.name = "AppError";
+    this.code = code;
+    this.status = status;
+  }
+};
+function asAppError(error) {
+  if (error instanceof AppError) return error;
+  return new AppError("INTERNAL_ERROR", 500, "internal error");
+}
+
+// src/core/types.js
+function createDataFlowSession({ user, protocol, transport, usage, quotaBytes }) {
+  return Object.freeze({
+    user: Object.freeze({
+      userID: user.userID,
+      username: user.username,
+      role: user.role,
+      settings: user.settings || {},
+      trojanSecret: user.trojanSecret || ""
+    }),
+    userID: user.userID,
+    protocol,
+    transport,
+    usage: Object.freeze(usage || { upload: 0, download: 0, total: 0 }),
+    quotaBytes: Number(quotaBytes || 0)
+  });
+}
+function createProxyRequest(input) {
+  return Object.freeze({
+    hostname: input.hostname,
+    port: input.port,
+    isUDP: Boolean(input.isUDP),
+    payload: input.payload || new Uint8Array(),
+    responseHeader: input.responseHeader || new Uint8Array()
+  });
 }
 
 // src/utils/crypto.js
@@ -363,21 +380,6 @@ var SHA224_K = [
 function isValidUuidV4(value) {
   return typeof value === "string" && UUID_V4_RE.test(value);
 }
-async function generateUserID(username, envID) {
-  const normalizedUsername = normalizeUsername(username);
-  if (!normalizedUsername) {
-    throw new Error("username is required");
-  }
-  if (!isValidUuidV4(envID)) {
-    throw new Error("env ID must be UUID v4");
-  }
-  const input = `${envID}:${normalizedUsername}`;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  const bytes = new Uint8Array(digest).slice(0, 16);
-  bytes[6] = bytes[6] & 15 | 64;
-  bytes[8] = bytes[8] & 63 | 128;
-  return bytesToUuid(bytes);
-}
 function normalizeUsername(username) {
   return String(username || "").trim().toLowerCase();
 }
@@ -441,25 +443,15 @@ function sha224Bytes(input) {
     hash[6] = hash[6] + g >>> 0;
     hash[7] = hash[7] + h >>> 0;
   }
-  const digest = new Uint8Array(28);
+  const digest2 = new Uint8Array(28);
   for (let wordIndex = 0; wordIndex < 7; wordIndex += 1) {
     const word = hash[wordIndex];
-    digest[wordIndex * 4] = word >>> 24 & 255;
-    digest[wordIndex * 4 + 1] = word >>> 16 & 255;
-    digest[wordIndex * 4 + 2] = word >>> 8 & 255;
-    digest[wordIndex * 4 + 3] = word & 255;
+    digest2[wordIndex * 4] = word >>> 24 & 255;
+    digest2[wordIndex * 4 + 1] = word >>> 16 & 255;
+    digest2[wordIndex * 4 + 2] = word >>> 8 & 255;
+    digest2[wordIndex * 4 + 3] = word & 255;
   }
-  return digest;
-}
-function bytesToUuid(bytes) {
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32)
-  ].join("-");
+  return digest2;
 }
 function padSha256Block(bytes) {
   const paddedLength = Math.ceil((bytes.byteLength + 9) / 64) * 64;
@@ -485,6 +477,459 @@ function toUint8Array(value) {
   return new Uint8Array(value || 0);
 }
 
+// src/admission/service.js
+var TRANSPORT_PATHS = Object.freeze({
+  ws: "websocket",
+  grpc: "grpc",
+  xhttp: "xhttp"
+});
+function parseDataFlowRoute(url) {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const transport = TRANSPORT_PATHS[segments[0]];
+  const userID = segments[1] || url.searchParams.get("uid") || "";
+  const protocol = segments[2] || url.searchParams.get("protocol") || "";
+  if (!transport || !isValidUuidV4(userID) || !["vless", "trojan"].includes(protocol)) return null;
+  return { transport, userID, protocol, suffix: segments.slice(3) };
+}
+function createAdmissionService({ users, bans, usage, config }) {
+  return {
+    async admit(route) {
+      if (!route || !isValidUuidV4(route.userID)) {
+        throw new AppError("INVALID_DATA_FLOW_ROUTE", 404);
+      }
+      const user = await users.getByID(route.userID);
+      if (!user) throw new AppError("USER_NOT_FOUND", 404);
+      if (user.disabled) throw new AppError("USER_DISABLED", 403);
+      const activeBan = await bans.getActive(user.userID);
+      if (activeBan) throw new AppError("USER_BANNED", 403);
+      const currentUsage = await usage.get(user.userID);
+      const runtimeConfig = await config.getRuntime();
+      const quotaBytes = resolveQuota(user, runtimeConfig);
+      if (quotaBytes > 0 && Number(currentUsage.total || 0) >= quotaBytes) {
+        throw new AppError("TRAFFIC_QUOTA_EXHAUSTED", 403);
+      }
+      const protocol = resolveProtocol(route, runtimeConfig);
+      const allowedTransports = resolveTransports(runtimeConfig);
+      if (!allowedTransports.includes(route.transport)) {
+        throw new AppError("TRANSPORT_DISABLED", 403);
+      }
+      return createDataFlowSession({
+        user,
+        protocol,
+        transport: route.transport,
+        usage: currentUsage,
+        quotaBytes
+      });
+    }
+  };
+}
+function resolveQuota(user, config) {
+  const value = user.quotaBytes ?? config.quotaBytes ?? config.settings?.quotaBytes ?? 0;
+  const quota = Number(value);
+  return Number.isFinite(quota) && quota > 0 ? quota : 0;
+}
+function resolveProtocol(route, config) {
+  const enabled = Array.isArray(config.protocols) ? config.protocols : [config.protocol || "vless"];
+  if (!enabled.includes(route.protocol)) {
+    throw new AppError("PROTOCOL_DISABLED", 403);
+  }
+  return route.protocol;
+}
+function resolveTransports(config) {
+  const configured = Array.isArray(config.transports) ? config.transports : [config.transport || "websocket"];
+  return configured.filter((value) => ["websocket", "grpc", "xhttp"].includes(value));
+}
+
+// src/auth/password.js
+var encoder = new TextEncoder();
+var ITERATIONS = 21e4;
+async function hashPassword(password, options = {}) {
+  validatePassword(password);
+  const salt = options.salt || crypto.getRandomValues(new Uint8Array(16));
+  const iterations = options.iterations || ITERATIONS;
+  const key = await derive(String(password), salt, iterations);
+  return `pbkdf2-sha256$${iterations}$${toBase64(salt)}$${toBase64(key)}`;
+}
+async function verifyPassword(password, encoded) {
+  const [algorithm, rawIterations, saltText, hashText] = String(encoded || "").split("$");
+  if (algorithm !== "pbkdf2-sha256") return false;
+  const iterations = Number(rawIterations);
+  if (!Number.isInteger(iterations) || iterations < 1e5) return false;
+  try {
+    const expected = fromBase64(hashText);
+    const actual = await derive(String(password), fromBase64(saltText), iterations, expected.byteLength);
+    return timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+function validatePassword(password) {
+  const value = String(password || "");
+  if (value.length < 10 || value.length > 256) throw new TypeError("PASSWORD_LENGTH_INVALID");
+}
+async function derive(password, salt, iterations, length = 32) {
+  const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, length * 8);
+  return new Uint8Array(bits);
+}
+function timingSafeEqual(a, b) {
+  if (a.byteLength !== b.byteLength) return false;
+  let diff = 0;
+  for (let i = 0; i < a.byteLength; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+function toBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+function fromBase64(value) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+// src/auth/service.js
+var DUMMY_HASH = "pbkdf2-sha256$210000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+function createAuthService(users, sessions, loginAttempts) {
+  return {
+    async login(username, password, fingerprint) {
+      const normalized = String(username || "").trim().toLowerCase();
+      if (loginAttempts) await loginAttempts.check(fingerprint);
+      const user = await users.getByUsername(normalized);
+      const valid = await verifyPassword(password, user?.passwordHash || DUMMY_HASH) && Boolean(user);
+      if (!valid) {
+        if (loginAttempts) await loginAttempts.failure(fingerprint);
+        throw new AppError("INVALID_CREDENTIALS", 401);
+      }
+      if (user.disabled) throw new AppError("USER_DISABLED", 403);
+      if (loginAttempts) await loginAttempts.success(fingerprint);
+      return { user, session: await sessions.create(user.userID) };
+    },
+    resolve: (request) => sessions.resolve(request),
+    logout: (request) => sessions.revoke(request)
+  };
+}
+
+// src/auth/login-attempts.js
+var MAX_FAILURES = 5;
+var LOCK_MINUTES = 15;
+function createLoginAttemptService(env) {
+  return {
+    async check(fingerprint) {
+      const key = normalizeFingerprint2(fingerprint);
+      if (!key) return;
+      const row = await env.DB.prepare("SELECT failures, locked_until FROM login_attempts WHERE fingerprint = ?").bind(key).first();
+      if (row && row.locked_until && Date.parse(row.locked_until) > Date.now()) {
+        throw new AppError("LOGIN_RATE_LIMITED", 429);
+      }
+      if (row?.locked_until) {
+        await env.DB.prepare("DELETE FROM login_attempts WHERE fingerprint = ?").bind(key).run();
+      }
+    },
+    async success(fingerprint) {
+      const key = normalizeFingerprint2(fingerprint);
+      if (!key) return;
+      await env.DB.prepare("DELETE FROM login_attempts WHERE fingerprint = ?").bind(key).run();
+    },
+    async failure(fingerprint) {
+      const key = normalizeFingerprint2(fingerprint);
+      if (!key) return;
+      const now = /* @__PURE__ */ new Date();
+      const lockedUntil = new Date(now.getTime() + LOCK_MINUTES * 60 * 1e3).toISOString();
+      await env.DB.prepare(`
+        INSERT INTO login_attempts (fingerprint, failures, locked_until, updated_at)
+        VALUES (?, 1, NULL, ?)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+          failures = login_attempts.failures + 1,
+          locked_until = CASE WHEN login_attempts.failures + 1 >= ? THEN ? ELSE login_attempts.locked_until END,
+          updated_at = excluded.updated_at
+      `).bind(key, now.toISOString(), MAX_FAILURES, lockedUntil).run();
+    }
+  };
+}
+function normalizeFingerprint2(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.length > 128 ? text.slice(0, 128) : text;
+}
+
+// src/auth/guards.js
+function requireUser(user) {
+  if (!user) throw new AppError("AUTH_REQUIRED", 401);
+  if (user.disabled) throw new AppError("USER_DISABLED", 403);
+  return user;
+}
+function requireAdmin(user) {
+  requireUser(user);
+  if (user.role !== "admin") throw new AppError("ADMIN_REQUIRED", 403);
+  return user;
+}
+
+// src/subscription/node-builder.js
+var TRANSPORTS2 = Object.freeze({
+  websocket: Object.freeze({ type: "ws", hostKey: "host", pathKey: "path" }),
+  ws: Object.freeze({ type: "ws", hostKey: "host", pathKey: "path" }),
+  grpc: Object.freeze({ type: "grpc", hostKey: "authority", pathKey: "serviceName" }),
+  xhttp: Object.freeze({ type: "xhttp", hostKey: "host", pathKey: "path" })
+});
+function required(input, keys, label) {
+  for (const key of keys) {
+    if (input[key] !== void 0 && input[key] !== null && String(input[key]) !== "") {
+      return String(input[key]);
+    }
+  }
+  throw new TypeError(`${label} is required`);
+}
+function formatAddress(address) {
+  const value = String(address).trim();
+  if (value.includes(":") && !(value.startsWith("[") && value.endsWith("]"))) return `[${value}]`;
+  return value;
+}
+function addQuery(query, source) {
+  if (!source) return;
+  const entries = source instanceof URLSearchParams ? source.entries() : typeof source === "string" ? new URLSearchParams(source.replace(/^[?&]+/, "")).entries() : Object.entries(source);
+  for (const [key, value] of entries) {
+    if (value !== void 0 && value !== null) query.set(String(key), String(value));
+  }
+}
+function buildNodeURI(node) {
+  if (!node || typeof node !== "object") throw new TypeError("node input is required");
+  const protocol = required(node, ["protocol"], "protocol").toLowerCase();
+  if (protocol !== "vless" && protocol !== "trojan") {
+    throw new TypeError(`unsupported protocol: ${protocol}`);
+  }
+  const transportName = required(node, ["transport"], "transport").toLowerCase();
+  const transport = TRANSPORTS2[transportName];
+  if (!transport) throw new TypeError(`unsupported transport: ${transportName}`);
+  const credential = protocol === "vless" ? required(node, ["credential", "uuid", "userID"], "VLESS credential") : required(node, ["credential", "password", "secret"], "Trojan credential");
+  const address = formatAddress(required(node, ["address", "server"], "address"));
+  const port = Number(required(node, ["port"], "port"));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError("port must be between 1 and 65535");
+  const host = required(node, ["host"], "host");
+  const sni = String(node.sni ?? host);
+  const security = String(node.security ?? "tls");
+  const query = new URLSearchParams();
+  query.set("security", security);
+  query.set("type", transport.type);
+  query.set(transport.hostKey, host);
+  if (security === "tls" && sni) query.set("sni", sni);
+  const path = String(node.path || "/");
+  query.set(transport.pathKey, path);
+  if (protocol === "vless") query.set("encryption", String(node.encryption ?? "none"));
+  if (transport.type === "xhttp" && node.mode) query.set("mode", String(node.mode));
+  if (node.fingerprint || node.fp) query.set("fp", String(node.fingerprint ?? node.fp));
+  addQuery(query, node.query);
+  const name = String(node.name ?? `${protocol}-${transportName}-${host}`);
+  return `${protocol}://${encodeURIComponent(credential)}@${address}:${port}?${query.toString()}#${encodeURIComponent(name)}`;
+}
+
+// src/subscription/generator.js
+function list(value, label) {
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${label} must be a non-empty array`);
+  return value;
+}
+function namedValue(value, key) {
+  return typeof value === "string" ? value : value?.[key] ?? value?.name;
+}
+function generateNodeInputs({ protocols, transports, hosts, ...defaults }) {
+  const nodes = [];
+  for (const protocolInput of list(protocols, "protocols")) {
+    for (const transportInput of list(transports, "transports")) {
+      for (const hostInput of list(hosts, "hosts")) {
+        const protocol = namedValue(protocolInput, "protocol");
+        const transport = namedValue(transportInput, "transport");
+        const host = namedValue(hostInput, "host");
+        const protocolFields = typeof protocolInput === "object" ? protocolInput : {};
+        const transportFields = typeof transportInput === "object" ? transportInput : {};
+        const hostFields = typeof hostInput === "object" ? hostInput : {};
+        nodes.push({
+          ...defaults,
+          ...protocolFields,
+          ...transportFields,
+          ...hostFields,
+          protocol,
+          transport,
+          host
+        });
+      }
+    }
+  }
+  return nodes;
+}
+function generateSubscription(nodes, build = buildNodeURI) {
+  if (!Array.isArray(nodes)) throw new TypeError("nodes must be an array");
+  return nodes.map((node) => build(node)).join("\n");
+}
+
+// src/subscription/params.js
+var TLS_FRAGMENT_PRESETS = Object.freeze({
+  shadowrocket: "1,40-60,30-50,tlshello",
+  happ: "3,1,tlshello"
+});
+function asBoolean(value) {
+  return value === true || value === 1 || String(value).toLowerCase() === "true";
+}
+function normalizePath(path) {
+  const value = String(path || "/").trim() || "/";
+  return value.startsWith("/") ? value : `/${value}`;
+}
+function toQueryEntries(query) {
+  if (!query) return [];
+  if (query instanceof URLSearchParams) return [...query.entries()];
+  if (typeof query === "string") {
+    return [...new URLSearchParams(query.replace(/^[?&]+/, "")).entries()];
+  }
+  if (typeof query === "object" && !Array.isArray(query)) {
+    return Object.entries(query).filter(([, value]) => value !== void 0 && value !== null);
+  }
+  throw new TypeError("customQuery must be a string, object, or URLSearchParams");
+}
+function normalizeNodeParams(input = {}, options = {}) {
+  const randomPath = options.randomPath || input.randomPathFn;
+  let path = normalizePath(input.path);
+  if (asBoolean(input.randomPath ?? input["\u968F\u673A\u8DEF\u5F84"]) && typeof randomPath === "function") {
+    path = normalizePath(randomPath(path));
+  }
+  const pathUrl = new URL(path, "https://node.invalid");
+  const pathQuery = new URLSearchParams(pathUrl.search);
+  if (asBoolean(input.zeroRTT ?? input.enable0RTT ?? input["\u542F\u75280RTT"])) {
+    pathQuery.set("ed", String(input.earlyData ?? 2560));
+  }
+  const fragmentInput = input.fragment ?? input.tlsFragment ?? input["TLS\u5206\u7247"];
+  const preset = TLS_FRAGMENT_PRESETS[String(fragmentInput || "").toLowerCase()];
+  const fragment = preset || (fragmentInput && !/^(false|none|off)$/i.test(String(fragmentInput)) ? String(fragmentInput) : null);
+  const query = new URLSearchParams();
+  const fingerprint = input.fingerprint ?? input.Fingerprint ?? input.fp;
+  if (fingerprint) query.set("fp", String(fingerprint));
+  if (fragment) query.set("fragment", fragment);
+  const customQuery = input.customQuery ?? input.query;
+  for (const [key, value] of toQueryEntries(customQuery)) {
+    query.set(String(key), String(value));
+  }
+  const pathSearch = pathQuery.toString();
+  let pathname = pathUrl.pathname;
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+  }
+  return Object.freeze({
+    path: `${pathname}${pathSearch ? `?${pathSearch}` : ""}`,
+    query
+  });
+}
+
+// src/subscription/ech.js
+function firstDefined(object, keys) {
+  for (const key of keys) {
+    if (object?.[key] !== void 0 && object[key] !== null) return object[key];
+  }
+  return void 0;
+}
+function buildECHValue(config, nodeHost) {
+  if (!config || config.enabled === false || config.enable === false) return null;
+  const dns = firstDefined(config, ["dns", "DNS"]);
+  if (!dns || !String(dns).trim()) return null;
+  const configuredDomain = firstDefined(config, ["domain", "sni", "SNI"]);
+  const domain = String(configuredDomain) === "0" ? nodeHost : configuredDomain;
+  if (!domain || !String(domain).trim()) return String(dns).trim();
+  return `${String(domain).trim()}+${String(dns).trim()}`;
+}
+function withECH(node, config = node?.ech) {
+  const ech = buildECHValue(config, node?.host);
+  if (!ech) return { ...node };
+  return {
+    ...node,
+    query: { ...node.query || {}, ech }
+  };
+}
+
+// src/users/service.js
+function createUserService(repository) {
+  return {
+    async create(input) {
+      const username = normalizeUsername(input.username);
+      if (!/^[a-z0-9_.-]{3,64}$/.test(username)) throw new AppError("USERNAME_INVALID", 400);
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const user = {
+        userID: crypto.randomUUID(),
+        username,
+        passwordHash: await hashPassword(input.password),
+        role: input.role === "admin" ? "admin" : "user",
+        disabled: false,
+        quotaBytes: validQuota(input.quotaBytes),
+        trojanSecret: randomToken(32),
+        settings: input.settings || {},
+        createdAt: now,
+        updatedAt: now
+      };
+      await repository.create(user);
+      return publicUser(user);
+    },
+    async update(userID, fields, actor) {
+      const allowed = {};
+      if ("disabled" in fields) allowed.disabled = Boolean(fields.disabled);
+      if ("quotaBytes" in fields) allowed.quotaBytes = validQuota(fields.quotaBytes);
+      if ("role" in fields) allowed.role = fields.role === "admin" ? "admin" : "user";
+      if ("settings" in fields) allowed.settings = fields.settings && typeof fields.settings === "object" ? fields.settings : {};
+      if (fields.password) allowed.passwordHash = await hashPassword(fields.password);
+      const current = await repository.getByID(userID);
+      if (!current) throw new AppError("USER_NOT_FOUND", 404);
+      if (actor?.userID === userID && (allowed.role === "user" || allowed.disabled)) throw new AppError("SELF_LOCKOUT", 400);
+      if (current.role === "admin" && (allowed.role === "user" || allowed.disabled) && await repository.countAdmins() <= 1) {
+        throw new AppError("LAST_ADMIN_REQUIRED", 400);
+      }
+      const user = await repository.update(userID, allowed);
+      if (!user) throw new AppError("USER_NOT_FOUND", 404);
+      if ("disabled" in allowed || "role" in allowed || "passwordHash" in allowed) await repository.revokeSessions(userID);
+      return publicUser(user);
+    },
+    async get(userID) {
+      return publicUser(await repository.getByID(userID));
+    },
+    async list() {
+      return Promise.all((await repository.list()).map(publicUser));
+    },
+    async delete(userID, actor) {
+      if (actor?.userID === userID) throw new AppError("SELF_DELETE_FORBIDDEN", 400);
+      const user = await repository.getByID(userID);
+      if (user?.role === "admin" && await repository.countAdmins() <= 1) throw new AppError("LAST_ADMIN_REQUIRED", 400);
+      await repository.delete(userID);
+    }
+  };
+}
+function validQuota(value) {
+  if (value === void 0 || value === null || value === "") return 0;
+  const quota = Number(value);
+  if (!Number.isSafeInteger(quota) || quota < 0) throw new AppError("QUOTA_INVALID", 400);
+  return quota;
+}
+function randomToken(bytes) {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  return [...data].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+// src/users/governance.js
+function createGovernanceService(env) {
+  return {
+    async ban(userID, input = {}) {
+      const reason = String(input.reason || "");
+      const until = input.until ? new Date(input.until).toISOString() : null;
+      const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+      await env.DB.prepare(`INSERT INTO bans (user_id,reason,until,created_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason,until=excluded.until,created_at=excluded.created_at`).bind(userID, reason, until, createdAt).run();
+      return { userID, reason, until, createdAt };
+    },
+    async unban(userID) {
+      await env.DB.prepare("DELETE FROM bans WHERE user_id = ?").bind(userID).run();
+    },
+    async getBan(userID) {
+      return env.DB.prepare("SELECT user_id AS userID,reason,until,created_at AS createdAt FROM bans WHERE user_id = ?").bind(userID).first();
+    }
+  };
+}
+function validateBanTarget(user) {
+  if (!user) throw new AppError("USER_NOT_FOUND", 404);
+  return user;
+}
+
 // src/utils/http.js
 function jsonResponse(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body), {
@@ -504,1546 +949,1017 @@ function textResponse(body, status = 200, headers = {}) {
     }
   });
 }
-async function readJson(request) {
-  const contentType = request.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) {
-    return {};
-  }
+
+// src/api-v2/router.js
+function createApiRouter({ users, sessions }) {
+  const userService = createUserService(users);
+  const governance = createGovernanceService;
+  return async function handle(request, env) {
+    try {
+      const url = new URL(request.url);
+      const auth = createAuthService(users, sessions, createLoginAttemptService(env));
+      const current = await auth.resolve(request);
+      if (url.pathname === "/api/auth/login" && request.method === "POST") {
+        const body = await readBody(request);
+        const result = await auth.login(body.username, body.password, loginFingerprint(request, body.username));
+        return jsonResponse({ ok: true, user: publicUser(result.user) }, 200, { "set-cookie": result.session.cookie });
+      }
+      if (url.pathname === "/api/auth/logout" && request.method === "POST") return jsonResponse({ ok: true }, 200, { "set-cookie": await auth.logout(request) });
+      if (url.pathname === "/api/auth/me" && request.method === "GET") return jsonResponse({ ok: true, user: publicUser(requireUser(current)) });
+      if (url.pathname === "/api/admin/users" && request.method === "GET") {
+        requireAdmin(current);
+        return jsonResponse({ ok: true, users: await userService.list() });
+      }
+      if (url.pathname === "/api/admin/users" && request.method === "POST") {
+        requireAdmin(current);
+        return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201);
+      }
+      const match = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i);
+      if (match && request.method === "PATCH") {
+        requireAdmin(current);
+        return jsonResponse({ ok: true, user: await userService.update(match[1], await readBody(request), current) });
+      }
+      if (match && request.method === "DELETE") {
+        requireAdmin(current);
+        await userService.delete(match[1], current);
+        return jsonResponse({ ok: true });
+      }
+      const banMatch = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)\/ban$/i);
+      if (banMatch && request.method === "POST") {
+        requireAdmin(current);
+        validateBanTarget(await users.getByID(banMatch[1]));
+        return jsonResponse({ ok: true, ban: await governance(env).ban(banMatch[1], await readBody(request)) });
+      }
+      if (banMatch && request.method === "DELETE") {
+        requireAdmin(current);
+        await governance(env).unban(banMatch[1]);
+        return jsonResponse({ ok: true });
+      }
+      if (url.pathname === "/api/admin/config" && request.method === "GET") {
+        requireAdmin(current);
+        return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) });
+      }
+      if (url.pathname === "/api/admin/config" && request.method === "PATCH") {
+        requireAdmin(current);
+        const config = normalizeGlobalConfig(await readBody(request), await getGlobalConfig(env));
+        await putGlobalConfig(env, config);
+        return jsonResponse({ ok: true, config });
+      }
+      if (url.pathname === "/api/users/me/subscription" && request.method === "GET") return textResponse(await buildSubscription(env, requireUser(current), url));
+      throw new AppError("NOT_FOUND", 404);
+    } catch (error) {
+      const appError = asAppError(error);
+      return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
+    }
+  };
+}
+async function readBody(request) {
+  if (!request.headers.get("content-type")?.includes("application/json")) throw new AppError("JSON_REQUIRED", 415);
   try {
     return await request.json();
   } catch {
-    return null;
+    throw new AppError("INVALID_JSON", 400);
   }
 }
-function getPathSegments(url, prefix = "/api") {
-  const pathname = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : url.pathname;
-  return pathname.split("/").map((part) => part.trim()).filter(Boolean);
-}
-
-// src/api/notification.js
-async function sendNotification(env, userID, message, type = "private") {
-  return insertNotification(env, createNotification({ type, message, targetUserID: userID }));
-}
-async function broadcastNotification(env, message) {
-  return insertNotification(env, createNotification({ type: "global", message }));
-}
-async function sendSystemNotification(env, userID, message) {
-  return sendNotification(env, userID, message, "system");
-}
-async function listNotifications(env, userID) {
-  return listNotificationsForUser(env, userID);
-}
-async function countUnreadNotifications(env, userID) {
-  return countUnreadNotificationsForUser(env, userID);
-}
-async function markNotificationRead(env, userID, notificationID) {
-  return markNotificationReadForUser(env, userID, notificationID);
-}
-function createNotification({ type, message, targetUserID = "" }) {
-  return {
-    id: crypto.randomUUID(),
-    type,
-    message: String(message || ""),
-    targetUserID,
-    readAt: null,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-
-// src/api/handler.js
-async function handleApiRoute(context) {
-  const { segments } = context;
-  if (segments.length === 0) {
-    return jsonResponse({ ok: true, name: "edgetunnel api" });
-  }
-  const [resource, action] = segments;
-  if (resource === "login") return handleLoginRoute(context);
-  if (resource === "admin") return handleLoginRoute(context);
-  if (resource === "sub") return handleSubRoute(context);
-  if (resource === "user") return handleUserRoute(context, action, segments[2]);
-  if (resource === "config") return handleConfigRoute(context, action);
-  if (resource === "subscription") return handleSubscriptionRoute(context, action);
-  if (resource === "usage") return handleUsageRoute(context, action);
-  if (resource === "notification") return handleNotificationRoute(context, action);
-  return jsonResponse({ ok: false, error: "NOT_FOUND" }, 404);
-}
-async function handleLoginRoute(context) {
-  const { auth, env } = context;
-  const user = auth.isAdmin ? null : await getUser(env, auth.userID);
-  return jsonResponse({
-    ok: true,
-    auth: {
-      username: auth.username,
-      userID: auth.userID,
-      isAdmin: auth.isAdmin,
-      hasUser: Boolean(user)
-    },
-    user
-  });
-}
-async function handleSubRoute(context) {
-  const { auth, env, url } = context;
-  const user = await requireUser(env, auth.userID);
+async function buildSubscription(env, user, url) {
   const config = normalizeGlobalConfig(await getGlobalConfig(env));
-  const node = buildSubscriptionNode(url, user, config);
-  return textResponse(node);
-}
-async function handleUserRoute(context, action, targetUserID) {
-  const { auth, env, request } = context;
-  if (action === "list") {
-    requireAdmin(auth);
-    return jsonResponse({ ok: true, users: await listUsers(env) });
-  }
-  if (action === "add") {
-    requireAdmin(auth);
-    const body = await requireJson(request);
-    const username = body.username;
-    const userID2 = body.userID || await generateUserID(username, env.ID);
-    const user2 = normalizeUserConfig({ ...body, userID: userID2, username });
-    await putUser(env, userID2, user2);
-    return jsonResponse({ ok: true, user: user2 });
-  }
-  if (action === "update") {
-    const body = await requireJson(request);
-    const userID2 = body.userID || auth.userID;
-    requireSelfOrAdmin(auth, userID2);
-    const current = await getUser(env, userID2);
-    const update = auth.isAdmin ? body : pickOwnUserUpdate(body);
-    const user2 = normalizeUserConfig({ ...current, ...update, userID: userID2 }, current || {});
-    await putUser(env, userID2, user2);
-    return jsonResponse({ ok: true, user: user2 });
-  }
-  if (action === "disable") {
-    requireAdmin(auth);
-    const body = await requireJson(request);
-    const userID2 = body.userID || targetUserID;
-    const current = await requireUser(env, userID2);
-    const user2 = normalizeUserConfig({ ...current, disabled: true }, current);
-    await putUser(env, userID2, user2);
-    return jsonResponse({ ok: true, user: user2 });
-  }
-  if (action === "ban") {
-    requireAdmin(auth);
-    const body = await requireJson(request);
-    const userID2 = body.userID || targetUserID;
-    await requireUser(env, userID2);
-    const ban2 = normalizeBan(body);
-    await putBan(env, userID2, ban2);
-    await sendSystemNotification(env, userID2, `account banned: ${ban2.reason || "no reason"}`);
-    return jsonResponse({ ok: true, ban: ban2 });
-  }
-  if (action === "unban") {
-    requireAdmin(auth);
-    const body = await readJson(request) || {};
-    const userID2 = body.userID || targetUserID;
-    await deleteBan(env, userID2);
-    await sendSystemNotification(env, userID2, "account unbanned");
-    return jsonResponse({ ok: true });
-  }
-  const userID = action || auth.userID;
-  requireSelfOrAdmin(auth, userID);
-  const user = await requireUser(env, userID);
-  const ban = await getBan(env, userID);
-  return jsonResponse({ ok: true, user, ban });
-}
-async function handleConfigRoute(context, action) {
-  const { auth, env, request } = context;
-  if (action !== "global") {
-    return jsonResponse({ ok: false, error: "NOT_FOUND" }, 404);
-  }
-  requireAdmin(auth);
-  if (request.method === "GET") {
-    return jsonResponse({ ok: true, config: await getGlobalConfig(env) });
-  }
-  const body = await requireJson(request);
-  const current = await getGlobalConfig(env);
-  const config = normalizeGlobalConfig(body, current);
-  await putGlobalConfig(env, config);
-  return jsonResponse({ ok: true, config });
-}
-async function handleSubscriptionRoute(context, action) {
-  const { auth, env, url } = context;
-  const user = await requireUser(env, auth.userID);
-  const config = normalizeGlobalConfig(await getGlobalConfig(env));
-  if (action === "link") {
-    const link = `${url.origin}/sub?userID=${encodeURIComponent(auth.userID)}`;
-    return jsonResponse({ ok: true, link });
-  }
-  if (action === "nodes") {
-    return jsonResponse({
-      ok: true,
-      nodes: [{
-        userID: auth.userID,
-        username: user.username,
-        protocol: config.protocol,
-        transport: config.transport,
-        disabled: user.disabled,
-        path: buildTransportPath(config.transport, auth.userID)
-      }]
+  const protocols = config.protocols.map((protocol) => protocol === "vless" ? { protocol, uuid: user.userID } : { protocol, password: user.trojanSecret });
+  const transports = config.transports.map((transport) => ({
+    transport,
+    ...transport === "xhttp" ? { mode: "stream-one" } : {}
+  }));
+  let nodes = generateNodeInputs({ protocols, transports, hosts: config.HOSTS, address: url.hostname, port: 443 });
+  nodes = nodes.map((node) => {
+    const prefix = node.transport === "websocket" ? "ws" : node.transport;
+    const params = normalizeNodeParams({ ...config.\u8282\u70B9\u53C2\u6570, path: `/${prefix}/${user.userID}/${node.protocol}` }, {
+      randomPath: (path) => `${path}/${randomPathSegment()}`
     });
-  }
-  return jsonResponse({ ok: false, error: "NOT_FOUND" }, 404);
-}
-async function handleUsageRoute(context, action) {
-  const { auth, env } = context;
-  if (action === "list") {
-    requireAdmin(auth);
-    return jsonResponse({ ok: true, usage: await listUsage(env) });
-  }
-  const userID = action || auth.userID;
-  requireSelfOrAdmin(auth, userID);
-  return jsonResponse({ ok: true, usage: await getUsage(env, userID) });
-}
-async function handleNotificationRoute(context, action) {
-  const { auth, env, request } = context;
-  if (action === "send") {
-    requireAdmin(auth);
-    const body = await requireJson(request);
-    const notification = await sendNotification(env, body.userID, body.message, "private");
-    return jsonResponse({ ok: true, notification });
-  }
-  if (action === "broadcast") {
-    requireAdmin(auth);
-    const body = await requireJson(request);
-    const notification = await broadcastNotification(env, body.message);
-    return jsonResponse({ ok: true, notification });
-  }
-  if (action === "unread") {
-    return jsonResponse({ ok: true, unread: await countUnreadNotifications(env, auth.userID) });
-  }
-  if (action === "read") {
-    const body = await requireJson(request);
-    const notification = await markNotificationRead(env, auth.userID, body.notificationID);
-    return jsonResponse({ ok: true, notification });
-  }
-  return jsonResponse({ ok: true, notifications: await listNotifications(env, auth.userID) });
-}
-async function requireJson(request) {
-  const body = await readJson(request);
-  if (!body) {
-    throw new ApiError("INVALID_JSON", 400);
-  }
-  return body;
-}
-async function requireUser(env, userID) {
-  const user = await getUser(env, userID);
-  if (!user) {
-    throw new ApiError("USER_NOT_FOUND", 404);
-  }
-  return user;
-}
-function requireAdmin(auth) {
-  if (!auth.isAdmin) {
-    throw new ApiError("ADMIN_REQUIRED", 403);
-  }
-}
-function requireSelfOrAdmin(auth, userID) {
-  if (!auth.isAdmin && auth.userID !== userID) {
-    throw new ApiError("FORBIDDEN", 403);
-  }
-}
-function buildSubscriptionNode(url, user, config) {
-  const protocol = config.protocol;
-  const transport = config.transport;
-  const host = pickHost(url.host, config.HOSTS);
-  const path = buildTransportPath(transport, user.userID, config);
-  const baseParams = new URLSearchParams({
-    type: transport,
-    path
+    return { ...node, path: params.path, query: params.query };
   });
-  const customParams = parseCustomParams(config.\u8BA2\u9605\u53C2\u6570);
-  const params = new URLSearchParams(baseParams);
-  for (const [key, value] of customParams) {
-    params.set(key, value);
-  }
-  const echParams = buildECHParams(config, host);
-  if (echParams && !params.has("ech")) params.set("ech", echParams);
-  if (config.Fingerprint) params.set("fp", config.Fingerprint);
-  if (!params.has("host")) params.set("host", host);
-  if (!params.has("sni")) params.set("sni", host);
-  if (config["\u542F\u75280RTT"] || config["0RTT"]) params.set("ed", "2560");
-  const fragment = normalizeFragment(config.TLS\u5206\u7247);
-  if (fragment) params.set("fragment", fragment);
-  const name = encodeURIComponent(user.username);
-  if (protocol === "trojan") {
-    return `trojan://${sha224Text(user.userID)}@${url.host}:443?${params.toString()}#${name}`;
-  }
-  return `${protocol}://${user.userID}@${url.host}:443?${params.toString()}#${name}`;
+  if (config.ECH) nodes = nodes.map((node) => withECH(node, { enabled: true, ...config.ECHConfig }));
+  return generateSubscription(nodes);
 }
-function buildTransportPath(transport, userID, config) {
-  const encodedUserID = encodeURIComponent(userID);
-  const randomSuffix = config["\u968F\u673A\u8DEF\u5F84"] ? `/${Math.random().toString(36).slice(2, 10)}` : "";
-  if (transport === "grpc") return `/grpc/${encodedUserID}${randomSuffix}`;
-  if (transport === "websocket") return `/ws/${encodedUserID}${randomSuffix}`;
-  return `/xhttp/${encodedUserID}${randomSuffix}`;
+function randomPathSegment() {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
-function buildECHParams(config, host) {
-  if (!config?.ECH) return "";
-  const echConfig = config.ECHConfig || {};
-  const dns = String(echConfig.dns || echConfig.DNS || "").trim();
-  const domainRaw = echConfig.domain ?? echConfig.sni ?? echConfig.SNI ?? "";
-  const domain = String(domainRaw).trim();
-  const target = domain === "0" ? `${host}+${dns}` : domain ? `${domain}+${dns}` : dns;
-  return target ? encodeURIComponent(target) : "";
+function loginFingerprint(request, username) {
+  const address = request.headers.get("cf-connecting-ip") || "unknown";
+  const normalized = String(username || "").trim().toLowerCase();
+  return `${address}:${normalized}`;
 }
-function normalizeFragment(value) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  if (text === "Shadowrocket") return "1,40-60,30-50,tlshello";
-  if (text === "Happ") return "3,1,tlshello";
-  return text;
-}
-function pickHost(primaryHost, hosts = []) {
-  const list = Array.isArray(hosts) && hosts.length ? hosts : [primaryHost];
-  return list[Math.floor(Math.random() * list.length)] || primaryHost;
-}
-function parseCustomParams(input) {
-  const text = String(input || "").trim();
-  const params = new URLSearchParams();
-  if (!text) return params;
-  const normalized = text.replace(/^\?/, "");
-  for (const part of normalized.split("&")) {
-    if (!part) continue;
-    const [rawKey, ...rest] = part.split("=");
-    const key = rawKey.trim();
-    if (!key) continue;
-    const value = rest.join("=");
-    params.set(key, value);
-  }
-  return params;
-}
-function pickOwnUserUpdate(body) {
-  const allowed = /* @__PURE__ */ new Set(["password"]);
-  const blocked = Object.keys(body).filter((key) => !allowed.has(key));
-  if (blocked.length > 0) {
-    throw new ApiError(`USER_CAN_ONLY_UPDATE_PASSWORD: ${blocked.join(",")}`, 403);
-  }
-  if (!Object.hasOwn(body, "password")) {
-    throw new ApiError("PASSWORD_REQUIRED", 400);
-  }
-  return { password: String(body.password || "") };
-}
-var ApiError = class extends Error {
-  constructor(code, status = 400) {
-    super(code);
-    this.code = code;
-    this.status = status;
-  }
-};
 
-// src/api/index.js
-async function handleApiRequest(request, env, ctx) {
+// src/auth/bootstrap.js
+async function bootstrapAdmin(env, repository) {
+  if (await repository.count() !== 0) return false;
+  if (!env.BOOTSTRAP_ADMIN_USER || !env.BOOTSTRAP_ADMIN_PASSWORD) return false;
   try {
-    const url = new URL(request.url);
-    const credentials = readCredentials(request, url);
-    if (!credentials.username) {
-      return jsonResponse({
-        ok: false,
-        error: "MISSING_USERNAME",
-        message: "username is required"
-      }, 401);
-    }
-    const userID = await generateUserID(credentials.username, env.ID);
-    const auth = {
-      username: credentials.username,
-      password: credentials.password,
-      userID,
-      isAdmin: isAdminRequest(credentials, userID, env)
-    };
-    return await handleApiRoute({
-      request,
-      env,
-      ctx,
-      url,
-      segments: getPathSegments(url),
-      auth
-    });
+    await createUserService(repository).create({ username: env.BOOTSTRAP_ADMIN_USER, password: env.BOOTSTRAP_ADMIN_PASSWORD, role: "admin" });
   } catch (error) {
-    return jsonResponse({
-      ok: false,
-      error: error.code || "INTERNAL_ERROR",
-      message: error.message || "internal error"
-    }, error.status || 500);
-  }
-}
-function isAdminRequest(credentials, userID, env) {
-  if (userID === env.ID) return true;
-  if (!env.ADMIN_USERNAME || !env.ADMIN_PASSWORD) return false;
-  return credentials.username === normalizeUsername(env.ADMIN_USERNAME) && credentials.password === env.ADMIN_PASSWORD;
-}
-function readCredentials(request, url) {
-  const basic = readBasicAuth(request.headers.get("authorization"));
-  return {
-    username: normalizeUsername(url.searchParams.get("username") || basic.username),
-    password: url.searchParams.get("password") || basic.password || ""
-  };
-}
-function readBasicAuth(header) {
-  if (!header?.startsWith("Basic ")) {
-    return { username: "", password: "" };
-  }
-  try {
-    const decoded = atob(header.slice(6));
-    const splitIndex = decoded.indexOf(":");
-    if (splitIndex === -1) {
-      return { username: decoded, password: "" };
-    }
-    return {
-      username: decoded.slice(0, splitIndex),
-      password: decoded.slice(splitIndex + 1)
-    };
-  } catch {
-    return { username: "", password: "" };
-  }
-}
-
-// src/protocol/address.js
-var ADDRESS_TYPE_IPV4 = 1;
-var ADDRESS_TYPE_DOMAIN = 2;
-var ADDRESS_TYPE_IPV6 = 3;
-var SOCKS_ADDRESS_TYPE_DOMAIN = 3;
-var SOCKS_ADDRESS_TYPE_IPV6 = 4;
-var textDecoder = new TextDecoder();
-function parseVlessAddress(packet, offset) {
-  if (packet.byteLength < offset + 1) return { status: "need_more" };
-  const addressType = packet[offset];
-  let cursor = offset + 1;
-  if (addressType === ADDRESS_TYPE_IPV4) {
-    if (packet.byteLength < cursor + 4) return { status: "need_more" };
-    return {
-      status: "ok",
-      addressType,
-      hostname: `${packet[cursor]}.${packet[cursor + 1]}.${packet[cursor + 2]}.${packet[cursor + 3]}`,
-      offset: cursor + 4
-    };
-  }
-  if (addressType === ADDRESS_TYPE_DOMAIN) {
-    return parseDomainAddress(packet, cursor, addressType);
-  }
-  if (addressType === ADDRESS_TYPE_IPV6) {
-    return parseIpv6Address(packet, cursor, addressType);
-  }
-  return { status: "invalid" };
-}
-function parseSocksAddress(packet, offset) {
-  if (packet.byteLength < offset + 1) return { status: "need_more" };
-  const addressType = packet[offset];
-  let cursor = offset + 1;
-  if (addressType === ADDRESS_TYPE_IPV4) {
-    if (packet.byteLength < cursor + 4) return { status: "need_more" };
-    return {
-      status: "ok",
-      addressType,
-      hostname: `${packet[cursor]}.${packet[cursor + 1]}.${packet[cursor + 2]}.${packet[cursor + 3]}`,
-      offset: cursor + 4
-    };
-  }
-  if (addressType === SOCKS_ADDRESS_TYPE_DOMAIN) {
-    return parseDomainAddress(packet, cursor, addressType);
-  }
-  if (addressType === SOCKS_ADDRESS_TYPE_IPV6) {
-    return parseIpv6Address(packet, cursor, addressType);
-  }
-  return { status: "invalid" };
-}
-function readUint16(bytes, offset) {
-  return bytes[offset] << 8 | bytes[offset + 1];
-}
-function parseDomainAddress(packet, cursor, addressType) {
-  if (packet.byteLength < cursor + 1) return { status: "need_more" };
-  const length = packet[cursor];
-  cursor += 1;
-  if (length === 0) return { status: "invalid" };
-  if (packet.byteLength < cursor + length) return { status: "need_more" };
-  return {
-    status: "ok",
-    addressType,
-    hostname: textDecoder.decode(packet.subarray(cursor, cursor + length)),
-    offset: cursor + length
-  };
-}
-function parseIpv6Address(packet, cursor, addressType) {
-  if (packet.byteLength < cursor + 16) return { status: "need_more" };
-  return {
-    status: "ok",
-    addressType,
-    hostname: formatIpv6(packet.subarray(cursor, cursor + 16)),
-    offset: cursor + 16
-  };
-}
-function formatIpv6(bytes) {
-  const parts = [];
-  for (let index = 0; index < 8; index += 1) {
-    const base = index * 2;
-    parts.push(readUint16(bytes, base).toString(16));
-  }
-  return parts.join(":");
-}
-
-// src/protocol/trojan.js
-var TROJAN_HASH_HEX_LENGTH = 56;
-var CR = 13;
-var LF = 10;
-var TROJAN_CMD_TCP = 1;
-var TROJAN_CMD_UDP = 3;
-var textDecoder2 = new TextDecoder();
-function parseTrojanPacket(packet, session) {
-  const user = session.user;
-  const length = packet.byteLength;
-  if (length < TROJAN_HASH_HEX_LENGTH + 2) return { status: "need_more" };
-  if (packet[TROJAN_HASH_HEX_LENGTH] !== CR || packet[TROJAN_HASH_HEX_LENGTH + 1] !== LF) return { status: "invalid" };
-  const passwordHash = textDecoder2.decode(packet.subarray(0, TROJAN_HASH_HEX_LENGTH));
-  if (!constantTimeEqual(passwordHash, sha224Text(user.userID))) return { status: "invalid" };
-  const socksStart = TROJAN_HASH_HEX_LENGTH + 2;
-  if (length < socksStart + 2) return { status: "need_more" };
-  const command = packet[socksStart];
-  if (command !== TROJAN_CMD_TCP && command !== TROJAN_CMD_UDP) return { status: "invalid" };
-  const address = parseSocksAddress(packet, socksStart + 1);
-  if (address.status !== "ok") return address;
-  if (length < address.offset + 4) return { status: "need_more" };
-  const port = readUint16(packet, address.offset);
-  if (packet[address.offset + 2] !== CR || packet[address.offset + 3] !== LF) return { status: "invalid" };
-  return {
-    status: "ok",
-    result: {
-      protocol: "trojan",
-      user,
-      hostname: address.hostname,
-      port,
-      isUDP: command === TROJAN_CMD_UDP,
-      payload: packet.subarray(address.offset + 4),
-      responseHeader: null,
-      originalPacket: packet,
-      udpHeader: buildTrojanUdpHeader(address.addressType, address.hostname, port)
-    }
-  };
-}
-function buildTrojanUdpHeader(addressType, hostname, port) {
-  const header = [addressType];
-  if (addressType === 3) {
-    const domain = new TextEncoder().encode(String(hostname));
-    header.push(domain.byteLength, ...domain);
-  }
-  header.push(port >>> 8 & 255, port & 255, 0, 0, 13, 10);
-  return new Uint8Array(header);
-}
-function constantTimeEqual(left, right) {
-  if (left.length !== right.length) return false;
-  let diff = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    diff |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return diff === 0;
-}
-
-// src/protocol/vless.js
-var VLESS_CMD_TCP = 1;
-var VLESS_CMD_UDP = 2;
-function parseVlessPacket(packet, session) {
-  const user = session.user;
-  const length = packet.byteLength;
-  if (length < 18) return { status: "need_more" };
-  if (!uuidBytesMatch(packet, 1, user.userID)) return { status: "invalid" };
-  const version = packet[0];
-  const optLength = packet[17];
-  const commandIndex = 18 + optLength;
-  if (length < commandIndex + 4) return { status: "need_more" };
-  const command = packet[commandIndex];
-  if (command !== VLESS_CMD_TCP && command !== VLESS_CMD_UDP) return { status: "invalid" };
-  const portIndex = commandIndex + 1;
-  const port = readUint16(packet, portIndex);
-  const address = parseVlessAddress(packet, portIndex + 2);
-  if (address.status !== "ok") return address;
-  return {
-    status: "ok",
-    result: {
-      protocol: "vless",
-      user,
-      hostname: address.hostname,
-      port,
-      isUDP: command === VLESS_CMD_UDP,
-      payload: packet.subarray(address.offset),
-      responseHeader: new Uint8Array([version, 0]),
-      originalPacket: null,
-      udpHeader: buildVlessUdpHeader(packet, address.offset, address.addressType, port, address.hostname)
-    }
-  };
-}
-function buildVlessUdpHeader(packet, payloadOffset, addressType, port, hostname) {
-  if (packet[0] === void 0) return new Uint8Array(0);
-  const header = [];
-  header.push(addressType);
-  if (addressType === 2) {
-    const domain = new TextEncoder().encode(String(hostname));
-    header.push(domain.byteLength);
-    header.push(...domain);
-  } else if (addressType === 1 || addressType === 3) {
-  }
-  header.push(port >>> 8 & 255, port & 255, 0, 0, 13, 10);
-  return new Uint8Array(header);
-}
-function uuidBytesMatch(data, offset, uuid) {
-  const expected = uuidToBytes(uuid);
-  if (!expected || data.byteLength < offset + 16) return false;
-  for (let index = 0; index < 16; index += 1) {
-    if (data[offset + index] !== expected[index]) return false;
+    if (await repository.count() === 0) throw error;
+    return false;
   }
   return true;
 }
-function uuidToBytes(uuid) {
-  const clean = String(uuid || "").replace(/-/g, "");
-  if (clean.length !== 32) return null;
-  const bytes = new Uint8Array(16);
-  for (let index = 0; index < 16; index += 1) {
-    const high = hexNibble(clean.charCodeAt(index * 2));
-    const low = hexNibble(clean.charCodeAt(index * 2 + 1));
-    if (high < 0 || low < 0) return null;
-    bytes[index] = high << 4 | low;
-  }
-  return bytes;
-}
-function hexNibble(code) {
-  if (code >= 48 && code <= 57) return code - 48;
-  const lower = code | 32;
-  if (lower >= 97 && lower <= 102) return lower - 87;
-  return -1;
-}
 
-// src/protocol/index.js
-function parseProxyPacket(packet, session) {
-  if (session.protocol === "vless") return parseVlessPacket(packet, session);
-  if (session.protocol === "trojan") return parseTrojanPacket(packet, session);
-  return { status: "invalid" };
-}
-
-// src/protocol/parse.js
-var MAX_FIRST_PACKET_BYTES = 16 * 1024;
-async function readFirstProxyPacket(reader, session, options = {}) {
-  const maxBytes = options.maxBytes || MAX_FIRST_PACKET_BYTES;
-  let buffer = new Uint8Array(Math.min(1024, maxBytes));
-  let offset = 0;
-  while (offset < maxBytes) {
-    const { done, value } = await reader.read();
-    if (done) return null;
-    const chunk = toUint8Array2(value);
-    if (chunk.byteLength === 0) continue;
-    if (offset + chunk.byteLength > maxBytes) {
-      throw new Error("first packet exceeds maximum size");
+// src/auth/session.js
+var COOKIE = "edt_session";
+function createSessionService(env, users, options = {}) {
+  const ttlSeconds = Number(options.ttlSeconds || 86400);
+  return {
+    async create(userID) {
+      const token = randomToken2(32);
+      const tokenHash = await digest(token);
+      const now = /* @__PURE__ */ new Date();
+      const expires = new Date(now.getTime() + ttlSeconds * 1e3);
+      await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash, userID, expires.toISOString(), now.toISOString()).run();
+      return { token, cookie: `${COOKIE}=${token}; Path=/; Max-Age=${ttlSeconds}; HttpOnly; Secure; SameSite=Strict` };
+    },
+    async resolve(request) {
+      const token = readCookie(request.headers.get("cookie"), COOKIE);
+      if (!token) return null;
+      const hash = await digest(token);
+      const row = await env.DB.prepare("SELECT user_id,expires_at,revoked_at FROM sessions WHERE token_hash = ?").bind(hash).first();
+      if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now()) return null;
+      const user = await users.getByID(row.user_id);
+      if (!user || user.disabled) return null;
+      const ban = await env.DB.prepare("SELECT 1 AS ok FROM bans WHERE user_id = ? AND (until IS NULL OR until > ?) LIMIT 1").bind(row.user_id, (/* @__PURE__ */ new Date()).toISOString()).first();
+      return ban ? null : user;
+    },
+    async revoke(request) {
+      const token = readCookie(request.headers.get("cookie"), COOKIE);
+      if (token) await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ?").bind((/* @__PURE__ */ new Date()).toISOString(), await digest(token)).run();
+      return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
     }
-    if (offset + chunk.byteLength > buffer.byteLength) {
-      const next = new Uint8Array(Math.min(maxBytes, Math.max(buffer.byteLength * 2, offset + chunk.byteLength)));
-      next.set(buffer.subarray(0, offset));
-      buffer = next;
-    }
-    buffer.set(chunk, offset);
-    offset += chunk.byteLength;
-    const packet = buffer.subarray(0, offset);
-    const parsed = parseProxyPacket(packet, session);
-    if (parsed.status === "ok") return parsed.result;
-    if (parsed.status === "invalid") return null;
-  }
-  throw new Error("first packet exceeds maximum size");
+  };
 }
-function toUint8Array2(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  return new Uint8Array(value || 0);
+async function digest(value) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return [...bytes].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+function randomToken2(length) {
+  const b = crypto.getRandomValues(new Uint8Array(length));
+  let s = "";
+  for (const v of b) s += String.fromCharCode(v);
+  return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+function readCookie(header, name) {
+  for (const part of String(header || "").split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return "";
 }
 
-// src/connector/tcp.js
+// src/connector/direct.js
 import { connect } from "cloudflare:sockets";
-function createTcpConnector(request) {
-  if (typeof request?.fetcher?.connect === "function") {
-    return (target, options) => request.fetcher.connect(target, options);
-  }
-  return (target, options) => connect(target, options);
-}
-
-// src/proxy/session.js
-async function resolveDataFlowSession(request, env) {
-  const url = new URL(request.url);
-  const user = await resolveUserFromRequest(url, env);
-  if (!user) {
-    return { ok: false, response: new Response("User not found", { status: 404 }) };
-  }
-  if (user.disabled) {
-    return { ok: false, response: new Response("User is disabled", { status: 403 }) };
-  }
-  const ban = await getBan(env, user.userID);
-  if (isActiveBan(ban)) {
-    return { ok: false, response: new Response("User is banned", { status: 403 }) };
-  }
-  const usage = await getUsage(env, user.userID);
-  const config = normalizeRuntimeConfig(await getGlobalConfig(env));
-  if (!hasRemainingQuota(user, usage, config)) {
-    return { ok: false, response: new Response("Traffic quota exhausted", { status: 403 }) };
-  }
+function createDirectConnector(connectImpl = connect) {
   return {
-    ok: true,
-    user,
-    ban,
-    usage,
-    config,
-    protocol: config.protocol || config.defaultProtocol || "vless",
-    transport: config.transport || config.defaultTransport || "websocket"
-  };
-}
-function isActiveBan(ban) {
-  if (!ban) return false;
-  if (!ban.until) return true;
-  const until = Date.parse(ban.until);
-  if (Number.isNaN(until)) return true;
-  return until > Date.now();
-}
-async function resolveUserFromRequest(url, env) {
-  const userID = findUserID(url);
-  if (userID) return getUser(env, userID);
-  const username = findUsername(url);
-  if (username) return getUserByUsername(env, username);
-  return null;
-}
-function findUserID(url) {
-  const candidates = [
-    url.searchParams.get("userID"),
-    url.searchParams.get("user_id"),
-    url.searchParams.get("uid"),
-    url.searchParams.get("id"),
-    ...url.pathname.split("/")
-  ];
-  return candidates.find((value) => isValidUuidV4(value)) || "";
-}
-function findUsername(url) {
-  return normalizeUsername(
-    url.searchParams.get("username") || url.searchParams.get("user") || ""
-  );
-}
-function hasRemainingQuota(user, usage, config) {
-  const limit = getTrafficLimit(user, config);
-  if (!Number.isFinite(limit) || limit <= 0) return true;
-  return Number(usage?.total || 0) < limit;
-}
-function getTrafficLimit(user, config) {
-  const globalSettings = config?.settings || {};
-  const value = globalSettings.trafficLimitBytes ?? globalSettings.quotaBytes ?? globalSettings.totalLimitBytes ?? globalSettings.limitBytes;
-  const limit = Number(value);
-  return Number.isFinite(limit) ? limit : 0;
-}
-function normalizeRuntimeConfig(config = {}) {
-  return {
-    ...config,
-    protocol: config.protocol || config.defaultProtocol || "vless",
-    transport: config.transport || config.defaultTransport || "websocket",
-    settings: config.settings && typeof config.settings === "object" ? config.settings : {}
-  };
-}
-
-// src/stream/bridge.js
-function createStreamBridge(controller) {
-  let closed = false;
-  return {
-    get closed() {
-      return closed;
-    },
-    send(value) {
-      if (closed) return false;
-      try {
-        controller.enqueue(toUint8Array3(value));
-        return true;
-      } catch {
-        closed = true;
-        return false;
-      }
-    },
-    close(error) {
-      if (closed) return;
-      closed = true;
-      try {
-        if (error) controller.error(error);
-        else controller.close();
-      } catch {
-      }
+    connect(target) {
+      return connectImpl({ hostname: target.hostname, port: target.port });
     }
   };
 }
-function toUint8Array3(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  return new Uint8Array(value || 0);
-}
 
-// src/stream/forward.js
-async function forwardTcpSession({ firstPacket, reader, bridge, connectTcp }) {
-  const socket = connectTcp({ hostname: firstPacket.hostname, port: firstPacket.port });
-  let remoteWriter;
-  let uploadError;
-  const downloadPump = pumpRemoteToBridge(socket, bridge).catch((error) => {
-    bridge.close(error);
-  });
+// src/dns/service.js
+async function resolveDnsOverTcp({ payload, connector, hostname = "8.8.4.4", port = 53 }) {
+  const query = toBytes(payload);
+  if (query.byteLength === 0 || query.byteLength > 65535) {
+    throw new AppError("INVALID_DNS_PAYLOAD", 400);
+  }
+  const socket = connector.connect({ hostname, port });
+  const writer = socket.writable.getWriter();
+  const reader = socket.readable.getReader();
   try {
-    remoteWriter = socket.writable.getWriter();
-    if (firstPacket.payload.byteLength > 0) {
-      await remoteWriter.write(firstPacket.payload);
-    }
-    while (!bridge.closed) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = toUint8Array4(value);
-      if (chunk.byteLength === 0) continue;
-      await remoteWriter.write(chunk);
-    }
-  } catch (error) {
-    uploadError = error;
-    bridge.close(error);
+    const frame = new Uint8Array(query.byteLength + 2);
+    frame[0] = query.byteLength >>> 8;
+    frame[1] = query.byteLength & 255;
+    frame.set(query, 2);
+    await writer.write(frame);
+    const response = await readDnsFrame(reader);
+    if (!response) throw new AppError("DNS_UPSTREAM_CLOSED", 502);
+    return response;
   } finally {
-    if (remoteWriter) {
-      try {
-        await remoteWriter.close();
-      } catch {
-        try {
-          remoteWriter.releaseLock();
-        } catch {
-        }
-      }
-    }
-    try {
-      await downloadPump;
-    } catch {
-    }
-    closeSocket(socket);
-  }
-  if (uploadError) throw uploadError;
-}
-async function pumpRemoteToBridge(socket, bridge) {
-  const remoteReader = socket.readable.getReader();
-  try {
-    while (!bridge.closed) {
-      const { done, value } = await remoteReader.read();
-      if (done) break;
-      if (!bridge.send(value)) break;
-    }
-  } finally {
-    try {
-      remoteReader.releaseLock();
-    } catch {
-    }
-  }
-}
-function closeSocket(socket) {
-  try {
-    socket?.close?.();
-  } catch {
-  }
-}
-function toUint8Array4(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  return new Uint8Array(value || 0);
-}
-
-// src/stream/udp.js
-async function handleUdpSession({ firstPacket, bridge, connectTcp, session }) {
-  if (!firstPacket?.isUDP) {
-    throw new Error("packet is not UDP");
-  }
-  if (firstPacket.protocol === "trojan") {
-    return handleTrojanUdp({ firstPacket, bridge, connectTcp, session });
-  }
-  if (firstPacket.port !== 53) {
-    throw new Error("UDP is not supported");
-  }
-  await forwardDnsOverTcp({
-    payload: firstPacket.payload,
-    bridge,
-    connectTcp,
-    targetHost: getUdpDnsHost(session, firstPacket),
-    targetPort: getUdpDnsPort(session, firstPacket),
-    responseHeader: firstPacket.responseHeader
-  });
-}
-async function handleTrojanUdp({ firstPacket, bridge, connectTcp, session }) {
-  if (firstPacket.port !== 53) {
-    throw new Error("UDP is not supported");
-  }
-  const udpContext = {
-    buffer: firstPacket.payload,
-    targetHost: firstPacket.hostname,
-    targetPort: firstPacket.port,
-    proxyAddress: session?.config?.proxyAddress || null
-  };
-  if (!udpContext.targetHost) {
-    throw new Error("UDP is not supported");
-  }
-  await forwardDnsOverTcp({
-    payload: udpContext.buffer,
-    bridge,
-    connectTcp,
-    targetHost: udpContext.proxyAddress || udpContext.targetHost,
-    targetPort: udpContext.targetPort,
-    responseHeader: null
-  });
-}
-async function forwardDnsOverTcp({ payload, bridge, connectTcp, targetHost, targetPort, responseHeader }) {
-  const socket = connectTcp({ hostname: targetHost, port: targetPort });
-  let writer;
-  let reader;
-  try {
-    if (socket.opened) await socket.opened;
-    writer = socket.writable.getWriter();
-    await writer.write(frameDnsQuery(payload));
     try {
       writer.releaseLock();
     } catch {
     }
-    writer = null;
-    reader = socket.readable.getReader();
-    const response = await readDnsResponse(reader);
-    if (!response || !response.byteLength) return;
-    if (responseHeader?.byteLength) {
-      bridge.send(responseHeader);
-    }
-    bridge.send(response);
-  } finally {
     try {
-      reader?.releaseLock();
+      reader.releaseLock();
     } catch {
     }
     try {
-      writer?.releaseLock();
-    } catch {
-    }
-    try {
-      socket.close();
+      await socket.close();
     } catch {
     }
   }
 }
-async function readDnsResponse(reader) {
-  const header = await readExactBytes(reader, 2);
-  if (!header) return null;
-  const length = header[0] << 8 | header[1];
-  if (length <= 0) return null;
-  const payload = await readExactBytes(reader, length);
-  if (!payload || payload.byteLength !== length) return null;
-  const response = new Uint8Array(2 + payload.byteLength);
-  response.set(header, 0);
-  response.set(payload, 2);
-  return response;
-}
-async function readExactBytes(reader, expectedLength) {
-  const chunks = [];
-  let total = 0;
-  while (total < expectedLength) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = toUint8Array5(value);
-    if (!chunk.byteLength) continue;
-    chunks.push(chunk);
-    total += chunk.byteLength;
-  }
-  if (total === 0) return null;
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  if (merged.byteLength <= expectedLength) return merged;
-  return merged.slice(0, expectedLength);
-}
-function frameDnsQuery(payload) {
-  const data = toUint8Array5(payload);
-  const framed = new Uint8Array(data.byteLength + 2);
-  framed[0] = data.byteLength >>> 8 & 255;
-  framed[1] = data.byteLength & 255;
-  framed.set(data, 2);
-  return framed;
-}
-function getUdpDnsHost(session, firstPacket) {
-  const udpConfig = session?.config?.udp && typeof session.config.udp === "object" ? session.config.udp : {};
-  return udpConfig.dnsHost || firstPacket.hostname || "8.8.4.4";
-}
-function getUdpDnsPort(session, firstPacket) {
-  const udpConfig = session?.config?.udp && typeof session.config.udp === "object" ? session.config.udp : {};
-  return Number(udpConfig.dnsPort || firstPacket.port || 53);
-}
-function toUint8Array5(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (typeof value === "string") return new TextEncoder().encode(value);
-  return new Uint8Array(value || 0);
-}
-
-// src/transport/grpc.js
-var GRPC_RESPONSE_HEADERS = {
-  "content-type": "application/grpc",
-  "grpc-status": "0",
-  "cache-control": "no-store",
-  "x-accel-buffering": "no"
-};
-async function handleGrpcRequest(request, env, ctx, options = {}) {
-  if (!request.body) {
-    return new Response("Bad Request", { status: 400 });
-  }
-  const session = await resolveDataFlowSession(request, env);
-  if (!session.ok) return session.response;
-  if (session.transport !== "grpc") {
-    return new Response("Transport is not enabled for this user", { status: 403 });
-  }
-  const reader = request.body.getReader();
-  let firstFrame;
-  try {
-    firstFrame = await readGrpcFrame(reader);
-  } catch (error) {
-    releaseReader(reader);
-    return new Response(error?.message || "Invalid request", { status: 400 });
-  }
-  if (!firstFrame) {
-    releaseReader(reader);
-    return new Response("Invalid request", { status: 400 });
-  }
-  const packetReader = createGrpcPayloadReader(reader, firstFrame.remainder);
-  let firstPacket;
-  try {
-    firstPacket = await readFirstProxyPacket(packetReader, session, options);
-  } catch (error) {
-    releaseReader(reader);
-    return new Response(error?.message || "Invalid request", { status: 400 });
-  }
-  if (!firstPacket) {
-    releaseReader(reader);
-    return new Response("Invalid request", { status: 400 });
-  }
-  if (firstPacket.isUDP && firstPacket.port !== 53) {
-    releaseReader(reader);
-    return new Response("UDP is not supported", { status: 400 });
-  }
-  return new Response(new ReadableStream({
-    async start(controller) {
-      const bridge = createGrpcBridge(createStreamBridge(controller));
-      try {
-        await runGrpcSession({
-          request,
-          session,
-          reader: packetReader,
-          firstPacket,
-          bridge
-        });
-      } catch (error) {
-        bridge.close(error);
-      } finally {
-        releaseReader(reader);
-        bridge.close();
-      }
-    },
-    cancel() {
-      cancelReader(reader);
-    }
-  }), {
-    status: 200,
-    headers: GRPC_RESPONSE_HEADERS
-  });
-}
-async function runGrpcSession({ request, session, reader, firstPacket, bridge }) {
-  await writeProtocolResponseHeader(firstPacket, bridge);
-  if (firstPacket.isUDP) {
-    await handleUdpSession({
-      firstPacket,
-      bridge,
-      connectTcp: createTcpConnector(request),
-      session
-    });
-    return;
-  }
-  await forwardTcpSession({
-    firstPacket,
-    reader,
-    bridge,
-    connectTcp: createTcpConnector(request)
-  });
-}
-async function readGrpcFrame(reader) {
-  const header = await readExact(reader, 5);
-  if (!header) return null;
-  if (header[0] !== 0) throw new Error("gRPC compression is not supported");
-  const payloadLength = new DataView(header.buffer, header.byteOffset, 5).getUint32(1);
-  if (payloadLength === 0) {
-    return { payload: new Uint8Array(0), remainder: new Uint8Array(0) };
-  }
-  const payload = await readExact(reader, payloadLength);
-  if (!payload) throw new Error("Truncated gRPC frame");
-  return { payload, remainder: new Uint8Array(0) };
-}
-async function readExact(reader, size) {
-  if (size === 0) return new Uint8Array(0);
-  const chunks = [];
-  let total = 0;
-  while (total < size) {
+async function readDnsFrame(reader) {
+  let buffer = new Uint8Array();
+  let expected = -1;
+  while (true) {
     const { done, value } = await reader.read();
     if (done) return null;
-    const chunk = toUint8Array6(value);
-    if (!chunk.byteLength) continue;
-    chunks.push(chunk);
-    total += chunk.byteLength;
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return merged.length > size ? merged.slice(0, size) : merged;
-}
-function createGrpcPayloadReader(reader, initialPayload) {
-  let initial = toUint8Array6(initialPayload);
-  return {
-    async read() {
-      if (initial && initial.byteLength > 0) {
-        const value = initial;
-        initial = new Uint8Array(0);
-        return { done: false, value };
-      }
-      return reader.read();
-    },
-    releaseLock() {
-      try {
-        reader.releaseLock();
-      } catch {
-      }
-    }
-  };
-}
-function createGrpcBridge(baseBridge) {
-  return {
-    get closed() {
-      return baseBridge.closed;
-    },
-    send(value) {
-      const chunk = toUint8Array6(value);
-      if (!chunk.byteLength) return false;
-      const framed = new Uint8Array(5 + chunk.byteLength);
-      framed[0] = 0;
-      framed[1] = chunk.byteLength >>> 24 & 255;
-      framed[2] = chunk.byteLength >>> 16 & 255;
-      framed[3] = chunk.byteLength >>> 8 & 255;
-      framed[4] = chunk.byteLength & 255;
-      framed.set(chunk, 5);
-      return baseBridge.send(framed);
-    },
-    close(error) {
-      baseBridge.close(error);
-    }
-  };
-}
-async function writeProtocolResponseHeader(firstPacket, bridge) {
-  if (firstPacket.responseHeader?.byteLength) {
-    bridge.send(firstPacket.responseHeader);
+    buffer = concat(buffer, toBytes(value));
+    if (expected < 0 && buffer.byteLength >= 2) expected = buffer[0] << 8 | buffer[1];
+    if (expected >= 0 && buffer.byteLength >= expected + 2) return buffer.slice(2, expected + 2);
   }
 }
-function releaseReader(reader) {
-  try {
-    reader.releaseLock();
-  } catch {
-  }
+function concat(a, b) {
+  const output = new Uint8Array(a.byteLength + b.byteLength);
+  output.set(a);
+  output.set(b, a.byteLength);
+  return output;
 }
-function cancelReader(reader) {
-  try {
-    const cancelled = reader.cancel();
-    if (cancelled?.catch) cancelled.catch(() => {
-    });
-  } catch {
-  }
-}
-function toUint8Array6(value) {
+function toBytes(value) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (typeof value === "string") return new TextEncoder().encode(value);
-  return new Uint8Array(value || 0);
+  return new Uint8Array();
 }
 
-// src/transport/ws.js
-var WS_RESPONSE_HEADERS = {
-  "cache-control": "no-store",
-  "content-type": "application/octet-stream"
-};
-async function handleWebSocketRequest(request, env, ctx, options = {}) {
-  const upgradeHeader = request.headers.get("upgrade") || "";
-  if (upgradeHeader.toLowerCase() !== "websocket") {
-    return new Response("Bad Request", { status: 400 });
-  }
-  const session = await resolveDataFlowSession(request, env);
-  if (!session.ok) return session.response;
-  if (session.transport !== "ws") {
-    return new Response("Transport is not enabled for this user", { status: 403 });
-  }
-  const pair = new WebSocketPair();
-  const client = pair[0];
-  const server = pair[1];
-  server.accept();
-  server.binaryType = "arraybuffer";
-  let firstPacketReader;
-  let bridge;
-  let stopped = false;
-  const inboundQueue = createWebSocketChunkQueue();
-  const inboundReader = inboundQueue.reader();
-  server.addEventListener("message", (event) => {
-    if (stopped) return;
-    inboundQueue.push(event.data);
-  });
-  server.addEventListener("close", () => {
-    stopped = true;
-    inboundQueue.close();
-    bridge?.close();
-  });
-  server.addEventListener("error", () => {
-    stopped = true;
-    inboundQueue.close();
-    bridge?.close();
-  });
-  firstPacketReader = inboundReader;
-  let firstPacket;
-  try {
-    firstPacket = await readFirstProxyPacket(firstPacketReader, session, options);
-  } catch (error) {
-    inboundQueue.close();
-    try {
-      server.close(1002, error?.message || "Invalid request");
-    } catch {
-    }
-    return new Response(null, { status: 101, webSocket: client, headers: WS_RESPONSE_HEADERS });
-  }
-  if (!firstPacket) {
-    inboundQueue.close();
-    try {
-      server.close(1002, "Invalid request");
-    } catch {
-    }
-    return new Response(null, { status: 101, webSocket: client, headers: WS_RESPONSE_HEADERS });
-  }
-  if (firstPacket.isUDP && firstPacket.protocol !== "trojan" && firstPacket.port !== 53) {
-    inboundQueue.close();
-    try {
-      server.close(1003, "UDP is not supported");
-    } catch {
-    }
-    return new Response(null, { status: 101, webSocket: client, headers: WS_RESPONSE_HEADERS });
-  }
-  bridge = createWebSocketBridge(server);
-  queueMicrotask(async () => {
-    try {
-      await runWebSocketSession({ request, session, firstPacket, bridge, inboundQueue, reader: firstPacketReader, queueReader: inboundReader });
-    } catch (error) {
-      bridge.close(error);
-    } finally {
-      stopped = true;
-      inboundQueue.close();
-      try {
-        server.close();
-      } catch {
-      }
-    }
-  });
-  return new Response(null, {
-    status: 101,
-    webSocket: client,
-    headers: WS_RESPONSE_HEADERS
-  });
+// src/protocol-v2/address.js
+function parseAddress(bytes, offset) {
+  return parseTypedAddress(bytes, offset, { domain: 2, ipv6: 3 });
 }
-async function runWebSocketSession({ request, session, firstPacket, bridge, inboundQueue, reader, queueReader }) {
-  await writeProtocolResponseHeader2(firstPacket, bridge);
-  if (firstPacket.isUDP) {
-    await handleUdpSession({
-      firstPacket,
-      bridge,
-      connectTcp: createTcpConnector(request),
-      request,
-      session
-    });
-    return;
-  }
-  const combinedReader = createCombinedReader(reader, queueReader);
-  await forwardTcpSession({
-    firstPacket,
-    reader: combinedReader,
-    bridge,
-    connectTcp: createTcpConnector(request)
-  });
+function parseSocksAddress(bytes, offset) {
+  return parseTypedAddress(bytes, offset, { domain: 3, ipv6: 4 });
 }
-async function writeProtocolResponseHeader2(firstPacket, bridge) {
-  if (firstPacket.responseHeader?.byteLength) {
-    bridge.send(firstPacket.responseHeader);
+function parseTypedAddress(bytes, offset, types) {
+  if (offset >= bytes.byteLength) return { needMore: true };
+  const type = bytes[offset];
+  if (type === 1) {
+    if (bytes.byteLength < offset + 5) return { needMore: true };
+    return { hostname: [...bytes.slice(offset + 1, offset + 5)].join("."), offset: offset + 5 };
   }
+  if (type === types.domain) {
+    if (bytes.byteLength < offset + 2) return { needMore: true };
+    const length = bytes[offset + 1];
+    if (length === 0) return { error: "INVALID_ADDRESS" };
+    if (bytes.byteLength < offset + 2 + length) return { needMore: true };
+    return { hostname: new TextDecoder().decode(bytes.slice(offset + 2, offset + 2 + length)), offset: offset + 2 + length };
+  }
+  if (type === types.ipv6) {
+    if (bytes.byteLength < offset + 17) return { needMore: true };
+    const groups = [];
+    for (let index = offset + 1; index < offset + 17; index += 2) {
+      groups.push((bytes[index] << 8 | bytes[index + 1]).toString(16));
+    }
+    return { hostname: groups.join(":"), offset: offset + 17 };
+  }
+  return { error: "UNSUPPORTED_ADDRESS_TYPE" };
 }
-function createWebSocketBridge(socket) {
-  let closed = false;
+
+// src/protocol-v2/helpers.js
+function appendBytes(current, value) {
+  const chunk = toBytes2(value);
+  const output = new Uint8Array(current.byteLength + chunk.byteLength);
+  output.set(current);
+  output.set(chunk, current.byteLength);
+  return output;
+}
+function toBytes2(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array();
+}
+function uuidToBytes(uuid) {
+  const hex = String(uuid).replaceAll("-", "");
+  if (!/^[0-9a-f]{32}$/i.test(hex)) return null;
+  return Uint8Array.from(hex.match(/../g), (pair) => Number.parseInt(pair, 16));
+}
+function equalBytes(a, b) {
+  if (!a || !b || a.byteLength !== b.byteLength) return false;
+  let difference = 0;
+  for (let index = 0; index < a.byteLength; index += 1) difference |= a[index] ^ b[index];
+  return difference === 0;
+}
+
+// src/protocol-v2/types.js
+var NEED_MORE = Object.freeze({ status: "need-more" });
+function ready(request, remainder = new Uint8Array()) {
+  return { status: "ready", request, remainder };
+}
+function protocolError(code) {
+  return { status: "error", code };
+}
+
+// src/protocol-v2/trojan.js
+var encoder2 = new TextEncoder();
+function createTrojanParser(credentials, limits = {}) {
+  const expected = encoder2.encode(sha224Text(credentials?.secret || credentials?.trojanSecret || ""));
+  const maxBytes = Number(limits.maxFirstPacketBytes || 64 * 1024);
+  let buffer = new Uint8Array();
+  let finished = false;
   return {
-    get closed() {
-      return closed;
-    },
-    send(value) {
-      if (closed) return false;
-      try {
-        socket.send(toUint8Array7(value));
-        return true;
-      } catch {
-        closed = true;
-        return false;
+    push(chunk) {
+      if (finished) return protocolError("PARSER_FINISHED");
+      buffer = appendBytes(buffer, chunk);
+      if (buffer.byteLength > maxBytes) return protocolError("FIRST_PACKET_TOO_LARGE");
+      if (buffer.byteLength < 59) return NEED_MORE;
+      if (!equalBytes(buffer.slice(0, 56), expected)) return protocolError("INVALID_CREDENTIALS");
+      if (buffer[56] !== 13 || buffer[57] !== 10) return protocolError("INVALID_TROJAN_HEADER");
+      const command = buffer[58];
+      if (command !== 1 && command !== 3) return protocolError("UNSUPPORTED_COMMAND");
+      const address = parseSocksAddress(buffer, 59);
+      if (address.needMore) return NEED_MORE;
+      if (address.error) return protocolError(address.error);
+      if (buffer.byteLength < address.offset + 4) return NEED_MORE;
+      const port = buffer[address.offset] << 8 | buffer[address.offset + 1];
+      if (port === 0) return protocolError("INVALID_PORT");
+      if (buffer[address.offset + 2] !== 13 || buffer[address.offset + 3] !== 10) {
+        return protocolError("INVALID_TROJAN_HEADER");
       }
-    },
-    close(error) {
-      if (closed) return;
-      closed = true;
-      try {
-        if (error) {
-          socket.close(1011, error?.message || "internal error");
-        } else {
-          socket.close();
-        }
-      } catch {
-      }
+      finished = true;
+      const payload = buffer.slice(address.offset + 4);
+      return ready(createProxyRequest({
+        hostname: address.hostname,
+        port,
+        isUDP: command === 3,
+        payload
+      }), payload);
     }
   };
 }
-function createWebSocketChunkQueue() {
-  const chunks = [];
-  const waiters = [];
-  let closed = false;
+
+// src/protocol-v2/vless.js
+function createVlessParser(credentials, limits = {}) {
+  const expectedUser = uuidToBytes(credentials?.userID || credentials?.uuid);
+  const maxBytes = Number(limits.maxFirstPacketBytes || 64 * 1024);
+  let buffer = new Uint8Array();
+  let finished = false;
+  return {
+    push(chunk) {
+      if (finished) return protocolError("PARSER_FINISHED");
+      buffer = appendBytes(buffer, chunk);
+      if (buffer.byteLength > maxBytes) return protocolError("FIRST_PACKET_TOO_LARGE");
+      if (buffer.byteLength < 18) return NEED_MORE;
+      if (!expectedUser || !equalBytes(buffer.slice(1, 17), expectedUser)) return protocolError("INVALID_CREDENTIALS");
+      const version = buffer[0];
+      const commandOffset = 18 + buffer[17];
+      if (buffer.byteLength < commandOffset + 4) return NEED_MORE;
+      const command = buffer[commandOffset];
+      if (command !== 1 && command !== 2) return protocolError("UNSUPPORTED_COMMAND");
+      const port = buffer[commandOffset + 1] << 8 | buffer[commandOffset + 2];
+      if (port === 0) return protocolError("INVALID_PORT");
+      const address = parseAddress(buffer, commandOffset + 3);
+      if (address.needMore) return NEED_MORE;
+      if (address.error) return protocolError(address.error);
+      finished = true;
+      const payload = buffer.slice(address.offset);
+      return ready(createProxyRequest({
+        hostname: address.hostname,
+        port,
+        isUDP: command === 2,
+        payload,
+        responseHeader: Uint8Array.of(version, 0)
+      }), payload);
+    }
+  };
+}
+
+// src/protocol-v2/registry.js
+var FACTORIES = Object.freeze({ vless: createVlessParser, trojan: createTrojanParser });
+function createProtocolParser(protocol, credentials, limits) {
+  const factory = FACTORIES[protocol];
+  if (!factory) throw new TypeError(`unsupported protocol: ${protocol}`);
+  return factory(credentials, limits);
+}
+
+// src/protocol-v2/datagram.js
+function createDatagramCodec(protocol, defaults = {}) {
+  if (protocol === "vless") return createVlessDatagramCodec(defaults);
+  if (protocol === "trojan") return createTrojanDatagramCodec();
+  throw new TypeError(`unsupported datagram protocol: ${protocol}`);
+}
+function createVlessDatagramCodec(defaults) {
+  let buffer = new Uint8Array();
+  return {
+    push(chunk) {
+      buffer = appendBytes(buffer, chunk);
+      const datagrams = [];
+      while (buffer.byteLength >= 2) {
+        const length = buffer[0] << 8 | buffer[1];
+        if (length === 0) throw new Error("INVALID_UDP_DATAGRAM");
+        if (buffer.byteLength < length + 2) break;
+        datagrams.push({ hostname: defaults.hostname, port: defaults.port, payload: buffer.slice(2, length + 2) });
+        buffer = buffer.slice(length + 2);
+      }
+      return datagrams;
+    },
+    encode(datagram) {
+      const payload = toBytes3(datagram.payload);
+      const output = new Uint8Array(payload.byteLength + 2);
+      output[0] = payload.byteLength >>> 8;
+      output[1] = payload.byteLength & 255;
+      output.set(payload, 2);
+      return output;
+    },
+    finish() {
+      if (buffer.byteLength) throw new Error("INCOMPLETE_UDP_DATAGRAM");
+    }
+  };
+}
+function createTrojanDatagramCodec() {
+  let buffer = new Uint8Array();
+  return {
+    push(chunk) {
+      buffer = appendBytes(buffer, chunk);
+      const datagrams = [];
+      while (buffer.byteLength) {
+        const address = parseSocksAddress(buffer, 0);
+        if (address.needMore) break;
+        if (address.error) throw new Error(address.error);
+        if (buffer.byteLength < address.offset + 6) break;
+        const port = buffer[address.offset] << 8 | buffer[address.offset + 1];
+        const length = buffer[address.offset + 2] << 8 | buffer[address.offset + 3];
+        if (port === 0 || length === 0 || buffer[address.offset + 4] !== 13 || buffer[address.offset + 5] !== 10) {
+          throw new Error("INVALID_UDP_DATAGRAM");
+        }
+        const payloadOffset = address.offset + 6;
+        if (buffer.byteLength < payloadOffset + length) break;
+        datagrams.push({
+          hostname: address.hostname,
+          port,
+          payload: buffer.slice(payloadOffset, payloadOffset + length),
+          addressHeader: buffer.slice(0, address.offset + 2)
+        });
+        buffer = buffer.slice(payloadOffset + length);
+      }
+      return datagrams;
+    },
+    encode(datagram) {
+      const payload = toBytes3(datagram.payload);
+      const header = toBytes3(datagram.addressHeader);
+      if (!header.byteLength) throw new Error("UDP_ADDRESS_REQUIRED");
+      const output = new Uint8Array(header.byteLength + 4 + payload.byteLength);
+      output.set(header);
+      output[header.byteLength] = payload.byteLength >>> 8;
+      output[header.byteLength + 1] = payload.byteLength & 255;
+      output[header.byteLength + 2] = 13;
+      output[header.byteLength + 3] = 10;
+      output.set(payload, header.byteLength + 4);
+      return output;
+    },
+    finish() {
+      if (buffer.byteLength) throw new Error("INCOMPLETE_UDP_DATAGRAM");
+    }
+  };
+}
+function toBytes3(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array();
+}
+
+// src/transport-v2/limits.js
+var DEFAULT_TRANSPORT_LIMITS = Object.freeze({
+  maxFrameBytes: 1024 * 1024,
+  maxFirstPacketBytes: 64 * 1024,
+  maxQueuedBytes: 4 * 1024 * 1024
+});
+
+// src/transport-v2/grpc-frame.js
+function createGrpcFrameParser(limits = {}) {
+  const maxFrameBytes = Number(limits.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  let buffer = new Uint8Array();
   return {
     push(value) {
-      if (closed) return;
-      const chunk = toUint8Array7(value);
-      if (chunk.byteLength === 0) return;
-      if (waiters.length > 0) {
-        const waiter = waiters.shift();
-        waiter({ done: false, value: chunk });
-        return;
+      buffer = concat2(buffer, toBytes4(value));
+      const messages = [];
+      let offset = 0;
+      while (buffer.byteLength - offset >= 5) {
+        if (buffer[offset] !== 0) throw new Error("GRPC_COMPRESSION_UNSUPPORTED");
+        const length = new DataView(buffer.buffer, buffer.byteOffset + offset + 1, 4).getUint32(0);
+        if (length > maxFrameBytes) throw new Error("GRPC_FRAME_TOO_LARGE");
+        if (buffer.byteLength - offset - 5 < length) break;
+        messages.push(buffer.slice(offset + 5, offset + 5 + length));
+        offset += 5 + length;
       }
-      chunks.push(chunk);
-    },
-    close() {
-      if (closed) return;
-      closed = true;
-      while (waiters.length > 0) {
-        const waiter = waiters.shift();
-        waiter({ done: true });
-      }
-    },
-    reader() {
-      return {
-        read() {
-          if (chunks.length > 0) {
-            return Promise.resolve({ done: false, value: chunks.shift() });
-          }
-          if (closed) return Promise.resolve({ done: true });
-          return new Promise((resolve) => {
-            waiters.push(resolve);
-          });
-        },
-        releaseLock() {
-        }
-      };
+      buffer = buffer.slice(offset);
+      return { messages, remainder: buffer };
     }
   };
 }
-function createCombinedReader(initialReader, queueReader) {
-  let initialDone = false;
-  return {
-    async read() {
-      if (!initialDone) {
-        const first = await initialReader.read();
-        if (!first.done) return first;
-        initialDone = true;
-      }
-      return queueReader.read();
-    },
-    releaseLock() {
-      try {
-        initialReader.releaseLock();
-      } catch {
-      }
-    }
-  };
+function encodeGrpcFrame(value) {
+  const payload = toBytes4(value);
+  const output = new Uint8Array(payload.byteLength + 5);
+  new DataView(output.buffer).setUint32(1, payload.byteLength);
+  output.set(payload, 5);
+  return output;
 }
-function toUint8Array7(value) {
+function decodeGrpcHunk(value) {
+  const message = toBytes4(value);
+  if (message[0] !== 10) throw new Error("GRPC_HUNK_INVALID");
+  const length = readVarint(message, 1);
+  if (!length || length.value > message.byteLength - length.offset) throw new Error("GRPC_HUNK_INVALID");
+  if (length.offset + length.value !== message.byteLength) throw new Error("GRPC_HUNK_INVALID");
+  return message.slice(length.offset, length.offset + length.value);
+}
+function encodeGrpcHunk(value) {
+  const payload = toBytes4(value);
+  const length = writeVarint(payload.byteLength);
+  const output = new Uint8Array(1 + length.byteLength + payload.byteLength);
+  output[0] = 10;
+  output.set(length, 1);
+  output.set(payload, 1 + length.byteLength);
+  return output;
+}
+function readVarint(bytes, offset) {
+  let value = 0;
+  let shift = 0;
+  for (let index = offset; index < bytes.byteLength && index < offset + 5; index += 1) {
+    const byte = bytes[index];
+    value += (byte & 127) * 2 ** shift;
+    if ((byte & 128) === 0) return { value, offset: index + 1 };
+    shift += 7;
+  }
+  return null;
+}
+function writeVarint(value) {
+  const output = [];
+  let remaining = value;
+  do {
+    let byte = remaining % 128;
+    remaining = Math.floor(remaining / 128);
+    if (remaining > 0) byte |= 128;
+    output.push(byte);
+  } while (remaining > 0);
+  return Uint8Array.from(output);
+}
+function concat2(a, b) {
+  const output = new Uint8Array(a.byteLength + b.byteLength);
+  output.set(a);
+  output.set(b, a.byteLength);
+  return output;
+}
+function toBytes4(value) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (typeof value === "string") return new TextEncoder().encode(value);
-  return new Uint8Array(value || 0);
+  return new Uint8Array();
 }
 
-// src/transport/xhttp.js
-var XHTTP_RESPONSE_HEADERS = {
-  "content-type": "application/octet-stream",
-  "x-accel-buffering": "no",
-  "cache-control": "no-store"
-};
-async function handleXhttpRequest(request, env, ctx, options = {}) {
-  if (!request.body) {
-    return new Response("Bad Request", { status: 400 });
+// src/transport-v2/grpc.js
+function openGrpcTransport(request, limits) {
+  const type = request.headers.get("content-type")?.toLowerCase() || "";
+  if (request.method !== "POST" || !type.startsWith("application/grpc")) {
+    throw new AppError("INVALID_GRPC_REQUEST", 400);
   }
-  const session = await resolveDataFlowSession(request, env);
-  if (!session.ok) return session.response;
-  if (session.transport !== "xhttp") {
-    return new Response("Transport is not enabled for this user", { status: 403 });
+  if (!request.body) throw new AppError("GRPC_BODY_REQUIRED", 400);
+  const parser = createGrpcFrameParser(limits);
+  const source = request.body.getReader();
+  const readable = new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        const { done, value } = await source.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        const { messages } = parser.push(value);
+        if (messages.length === 0) continue;
+        for (const message of messages) controller.enqueue(decodeGrpcHunk(message));
+        return;
+      }
+    },
+    cancel(reason) {
+      return source.cancel(reason);
+    }
+  });
+  const responseStream = new TransformStream();
+  const writer = responseStream.writable.getWriter();
+  let closed = false;
+  return {
+    readable,
+    async write(chunk) {
+      if (!closed) await writer.write(encodeGrpcFrame(encodeGrpcHunk(chunk)));
+    },
+    async close(reason) {
+      if (closed) return;
+      closed = true;
+      if (reason) await writer.abort(reason).catch(() => {
+      });
+      else await writer.close().catch(() => {
+      });
+    },
+    response: new Response(responseStream.readable, {
+      headers: { "content-type": "application/grpc", "grpc-encoding": "identity", "cache-control": "no-store" }
+    }),
+    metadata: Object.freeze({ name: "grpc" })
+  };
+}
+
+// src/transport-v2/websocket.js
+function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
+  if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    throw new AppError("INVALID_WEBSOCKET_REQUEST", 400);
   }
-  const reader = request.body.getReader();
-  let firstPacket;
-  try {
-    firstPacket = await readFirstProxyPacket(reader, session, options);
-  } catch (error) {
-    releaseReader2(reader);
-    return new Response(error?.message || "Invalid request", { status: 400 });
-  }
-  if (!firstPacket) {
-    releaseReader2(reader);
-    return new Response("Invalid request", { status: 400 });
-  }
-  if (firstPacket.isUDP && firstPacket.protocol !== "trojan" && firstPacket.port !== 53) {
-    releaseReader2(reader);
-    return new Response("UDP is not supported", { status: 400 });
-  }
-  return new Response(new ReadableStream({
-    async start(controller) {
-      const bridge = createStreamBridge(controller);
-      try {
-        await runXhttpSession({
-          request,
-          env,
-          ctx,
-          session,
-          reader,
-          firstPacket,
-          bridge
-        });
-      } catch (error) {
-        bridge.close(error);
-      } finally {
-        releaseReader2(reader);
-        bridge.close();
+  const Pair = runtime.WebSocketPair;
+  if (!Pair) throw new AppError("WEBSOCKET_UNAVAILABLE", 501);
+  const pair = new Pair();
+  const client = pair[0];
+  const server = pair[1];
+  server.binaryType = "arraybuffer";
+  server.accept();
+  const maxFrameBytes = Number(limits?.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxQueuedBytes = Number(limits?.maxQueuedBytes || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const queue = [];
+  let queuedBytes = 0;
+  let controller;
+  let closed = false;
+  const readable = new ReadableStream({
+    start(value) {
+      controller = value;
+    },
+    pull() {
+      const chunk = queue.shift();
+      if (chunk) {
+        queuedBytes -= chunk.byteLength;
+        controller.enqueue(chunk);
       }
     },
     cancel() {
-      cancelReader2(reader);
+      try {
+        server.close(1e3, "cancelled");
+      } catch {
+      }
     }
-  }), {
-    status: 200,
-    headers: XHTTP_RESPONSE_HEADERS
   });
-}
-async function runXhttpSession({ request, session, reader, firstPacket, bridge }) {
-  await writeProtocolResponseHeader3(firstPacket, bridge);
-  if (firstPacket.isUDP) {
-    await handleUdpSession({
-      firstPacket,
-      bridge,
-      connectTcp: createTcpConnector(request),
-      request,
-      session
-    });
-    return;
-  }
-  await forwardTcpSession({
-    firstPacket,
-    reader,
-    bridge,
-    connectTcp: createTcpConnector(request)
+  server.addEventListener("message", async (event) => {
+    if (typeof event.data === "string") {
+      controller.error(new AppError("WEBSOCKET_TEXT_UNSUPPORTED", 400));
+      try {
+        server.close(1003, "binary only");
+      } catch {
+      }
+      return;
+    }
+    const chunk = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : toBytes5(event.data);
+    if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes) {
+      closed = true;
+      try {
+        controller.error(new AppError("WEBSOCKET_BUFFER_LIMIT", 413));
+      } catch {
+      }
+      try {
+        server.close(1009, "message too large");
+      } catch {
+      }
+      return;
+    }
+    if (controller.desiredSize > 0 && queue.length === 0) controller.enqueue(chunk);
+    else {
+      queue.push(chunk);
+      queuedBytes += chunk.byteLength;
+    }
   });
+  server.addEventListener("close", () => {
+    closed = true;
+    try {
+      controller.close();
+    } catch {
+    }
+  });
+  server.addEventListener("error", (event) => {
+    closed = true;
+    try {
+      controller.error(event.error || new Error("websocket error"));
+    } catch {
+    }
+  });
+  const earlyData = readEarlyData(request.headers.get("sec-websocket-protocol"));
+  if (earlyData.bytes.byteLength) controller.enqueue(earlyData.bytes);
+  return {
+    readable,
+    async write(chunk) {
+      if (!closed) server.send(toBytes5(chunk));
+    },
+    async close(reason) {
+      if (closed) return;
+      closed = true;
+      try {
+        server.close(reason ? 1011 : 1e3, reason ? "pipeline error" : "done");
+      } catch {
+      }
+    },
+    response: new runtime.Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: earlyData.protocol ? { "sec-websocket-protocol": earlyData.protocol } : void 0
+    }),
+    metadata: Object.freeze({ name: "websocket" })
+  };
 }
-async function writeProtocolResponseHeader3(firstPacket, bridge) {
-  if (firstPacket.responseHeader?.byteLength) {
-    bridge.send(firstPacket.responseHeader);
-  }
-}
-function releaseReader2(reader) {
+function readEarlyData(header) {
+  const protocol = String(header || "").split(",")[0].trim();
+  if (!protocol || !/^[A-Za-z0-9_-]+$/.test(protocol)) return { protocol: "", bytes: new Uint8Array() };
   try {
-    reader.releaseLock();
+    const normalized = protocol.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(protocol.length / 4) * 4, "=");
+    return { protocol, bytes: Uint8Array.from(atob(normalized), (char) => char.charCodeAt(0)) };
   } catch {
+    return { protocol: "", bytes: new Uint8Array() };
   }
 }
-function cancelReader2(reader) {
-  try {
-    const cancelled = reader.cancel();
-    if (cancelled?.catch) cancelled.catch(() => {
+function toBytes5(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array();
+}
+
+// src/transport-v2/xhttp.js
+function openXhttpTransport(request) {
+  const type = request.headers.get("content-type")?.toLowerCase() || "";
+  if (request.method !== "POST" || !type.startsWith("application/x-http") && !type.startsWith("application/octet-stream")) {
+    throw new AppError("INVALID_XHTTP_REQUEST", 400);
+  }
+  if (!request.body) throw new AppError("XHTTP_BODY_REQUIRED", 400);
+  const responseStream = new TransformStream();
+  const writer = responseStream.writable.getWriter();
+  let closed = false;
+  return {
+    readable: request.body,
+    async write(chunk) {
+      if (!closed) await writer.write(chunk);
+    },
+    async close(reason) {
+      if (closed) return;
+      closed = true;
+      if (reason) await writer.abort(reason).catch(() => {
+      });
+      else await writer.close().catch(() => {
+      });
+    },
+    response: new Response(responseStream.readable, {
+      headers: { "content-type": "application/octet-stream", "cache-control": "no-store" }
+    }),
+    metadata: Object.freeze({ name: "xhttp" })
+  };
+}
+
+// src/transport-v2/registry.js
+var FACTORIES2 = Object.freeze({ websocket: openWebSocketTransport, grpc: openGrpcTransport, xhttp: openXhttpTransport });
+function openTransport(name, request, limits, runtime) {
+  const factory = FACTORIES2[name];
+  if (!factory) throw new TypeError(`unsupported transport: ${name}`);
+  return factory(request, limits, runtime);
+}
+
+// src/usage/meter.js
+function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024, maxBytes = 0 }) {
+  let pendingUpload = 0;
+  let pendingDownload = 0;
+  let counted = 0;
+  let flushing = null;
+  let needsReschedule = false;
+  const schedule = () => {
+    const task = flush();
+    if (ctx?.waitUntil) ctx.waitUntil(task);
+    return task;
+  };
+  const flush = async () => {
+    if (flushing) return flushing;
+    needsReschedule = false;
+    flushing = (async () => {
+      while (pendingUpload !== 0 || pendingDownload !== 0) {
+        const upload = pendingUpload;
+        const download = pendingDownload;
+        pendingUpload = 0;
+        pendingDownload = 0;
+        try {
+          await repository.increment(userID, upload, download);
+        } catch {
+          pendingUpload += upload;
+          pendingDownload += download;
+          break;
+        }
+      }
+    })().finally(() => {
+      flushing = null;
+      if ((pendingUpload !== 0 || pendingDownload !== 0) && !needsReschedule) {
+        needsReschedule = true;
+        if (ctx?.waitUntil) ctx.waitUntil(flush());
+      }
     });
-  } catch {
+    return flushing;
+  };
+  const add = (direction, bytes) => {
+    const value = validBytes(bytes);
+    if (maxBytes > 0 && counted + value > maxBytes) throw new UsageLimitError();
+    counted += value;
+    if (direction === "upload") pendingUpload += value;
+    else pendingDownload += value;
+    if (pendingUpload + pendingDownload >= flushThreshold) schedule();
+  };
+  return {
+    addUpload(bytes) {
+      add("upload", bytes);
+    },
+    addDownload(bytes) {
+      add("download", bytes);
+    },
+    flush
+  };
+}
+var UsageLimitError = class extends Error {
+  constructor() {
+    super("TRAFFIC_QUOTA_EXHAUSTED");
+    this.code = "TRAFFIC_QUOTA_EXHAUSTED";
+  }
+};
+function validBytes(value) {
+  const bytes = Number(value);
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0;
+}
+
+// src/proxy/pipeline.js
+function startDataFlowPipeline({ request, session, connector, usageRepository, ctx, runtime }) {
+  const transport = openTransport(session.transport, request, void 0, runtime);
+  const remaining = session.quotaBytes > 0 ? Math.max(0, session.quotaBytes - Number(session.usage.total || 0)) : 0;
+  const meter = createUsageMeter({ userID: session.userID, repository: usageRepository, ctx, maxBytes: remaining });
+  const task = runPipeline({ transport, session, connector, meter }).catch(async (error) => {
+    await transport.close(error);
+  }).finally(() => meter.flush());
+  ctx?.waitUntil?.(task);
+  return transport.response;
+}
+async function runPipeline({ transport, session, connector, meter }) {
+  const parser = createProtocolParser(session.protocol, {
+    userID: session.userID,
+    secret: session.user.trojanSecret
+  });
+  const reader = transport.readable.getReader();
+  let parsed;
+  try {
+    while (!parsed) {
+      const { done, value } = await reader.read();
+      if (done) throw new AppError("INCOMPLETE_PROTOCOL_HEADER", 400);
+      meter.addUpload(value.byteLength);
+      const result = parser.push(value);
+      if (result.status === "error") throw new AppError(result.code, 400);
+      if (result.status === "ready") parsed = result.request;
+    }
+    if (parsed.isUDP) return forwardDnsDatagrams({ reader, transport, connector, request: parsed, protocol: session.protocol, meter });
+    await forwardTcp({ reader, transport, connector, request: parsed, meter });
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+    }
+  }
+}
+async function forwardDnsDatagrams({ reader, transport, connector, request, protocol, meter }) {
+  const codec = createDatagramCodec(protocol, request);
+  let responseHeaderPending = request.responseHeader;
+  let chunk = request.payload;
+  while (true) {
+    for (const datagram of codec.push(chunk)) {
+      if (datagram.port !== 53) throw new AppError("UDP_UNSUPPORTED", 400);
+      const payload = await resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+      const response = codec.encode({ ...datagram, payload });
+      if (responseHeaderPending.byteLength) {
+        await transport.write(responseHeaderPending);
+        meter.addDownload(responseHeaderPending.byteLength);
+        responseHeaderPending = new Uint8Array();
+      }
+      meter.addDownload(response.byteLength);
+      await transport.write(response);
+    }
+    const next = await reader.read();
+    if (next.done) break;
+    chunk = next.value;
+    meter.addUpload(chunk.byteLength);
+  }
+  codec.finish();
+  await transport.close();
+}
+async function forwardTcp({ reader, transport, connector, request, meter }) {
+  const socket = connector.connect({ hostname: request.hostname, port: request.port });
+  if (socket.opened) await socket.opened;
+  const remoteWriter = socket.writable.getWriter();
+  const remoteReader = socket.readable.getReader();
+  const upload = (async () => {
+    try {
+      if (request.payload.byteLength) await remoteWriter.write(request.payload);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        meter.addUpload(value.byteLength);
+        await remoteWriter.write(value);
+      }
+      await remoteWriter.close();
+    } catch (error) {
+      await remoteReader.cancel(error).catch(() => {
+      });
+      throw error;
+    }
+  })();
+  const download = (async () => {
+    try {
+      if (request.responseHeader.byteLength) {
+        await transport.write(request.responseHeader);
+        meter.addDownload(request.responseHeader.byteLength);
+      }
+      while (true) {
+        const { done, value } = await remoteReader.read();
+        if (done) break;
+        meter.addDownload(value.byteLength);
+        await transport.write(value);
+      }
+    } catch (error) {
+      await reader.cancel(error).catch(() => {
+      });
+      throw error;
+    } finally {
+      await reader.cancel("remote closed").catch(() => {
+      });
+    }
+  })();
+  try {
+    const results = await Promise.allSettled([upload, download]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+    await transport.close();
+  } finally {
+    try {
+      remoteWriter.releaseLock();
+    } catch {
+    }
+    try {
+      remoteReader.releaseLock();
+    } catch {
+    }
+    try {
+      await socket.close();
+    } catch {
+    }
   }
 }
 
-// src/proxy/index.js
-async function handleDataFlowRequest(request, env, ctx) {
-  if (isWebSocketRequest(request)) {
-    return handleWebSocketRequest(request, env, ctx);
+// src/routes/router.js
+var CONTROL_PATHS = ["/login", "/logout", "/admin", "/sub"];
+function classifyRequest(request) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/") || CONTROL_PATHS.includes(url.pathname)) {
+    return { kind: "api", url };
   }
-  if (isGrpcRequest(request)) {
-    return handleGrpcRequest(request, env, ctx);
+  const dataFlow = parseDataFlowRoute(url);
+  if (dataFlow && matchesTransport(request, dataFlow.transport)) {
+    return { kind: "data-flow", url, dataFlow };
   }
-  if (isXhttpRequest(request)) {
-    return handleXhttpRequest(request, env, ctx);
+  if (url.pathname === "/version" && request.method === "GET") {
+    return { kind: "version", url };
   }
-  return jsonResponse({
-    ok: false,
-    error: "DATA_FLOW_NOT_IMPLEMENTED",
-    message: "only xhttp tcp forwarding is wired"
-  }, 501);
+  return { kind: "status", url };
 }
-function isXhttpRequest(request) {
-  const contentType = request.headers.get("content-type") || "";
-  return request.method === "POST" && !contentType.includes("application/grpc");
-}
-function isWebSocketRequest(request) {
-  const upgrade = request.headers.get("upgrade") || "";
-  return upgrade.toLowerCase() === "websocket";
-}
-function isGrpcRequest(request) {
-  const contentType = request.headers.get("content-type") || "";
-  return request.method === "POST" && contentType.includes("application/grpc");
+function matchesTransport(request, transport) {
+  const contentType = request.headers.get("content-type")?.toLowerCase() || "";
+  const upgrade = request.headers.get("upgrade")?.toLowerCase() || "";
+  if (transport === "websocket") return request.method === "GET" && upgrade === "websocket";
+  if (transport === "grpc") return request.method === "POST" && contentType.startsWith("application/grpc");
+  if (transport === "xhttp") {
+    return request.method === "POST" && (contentType.startsWith("application/x-http") || contentType.startsWith("application/octet-stream"));
+  }
+  return false;
 }
 
 // src/index.js
+var VERSION = true ? "3.0.0" : "3.0.0";
 var index_default = {
   async fetch(request, env, ctx) {
-    if (!isValidRuntimeEnv(env)) {
-      return jsonResponse({
-        ok: false,
-        error: "INVALID_ENV",
-        message: "ID must be a UUID v4 and DB binding is required"
-      }, 500);
+    if (!env?.DB) return jsonResponse({ ok: false, error: "DB_BINDING_REQUIRED" }, 500);
+    try {
+      const users = createUserRepository(env);
+      await bootstrapAdmin(env, users);
+      const route = classifyRequest(request);
+      if (route.kind === "api") {
+        const sessions = createSessionService(env, users);
+        return createApiRouter({ users, sessions })(request, env);
+      }
+      if (route.kind === "data-flow") {
+        const dependencies = createAdmissionDependencies(env);
+        const session = await createAdmissionService(dependencies).admit(route.dataFlow);
+        return startDataFlowPipeline({
+          request,
+          session,
+          connector: createDirectConnector(request.fetcher?.connect?.bind(request.fetcher)),
+          usageRepository: createUsageRepository(env),
+          ctx
+        });
+      }
+      if (route.kind === "version") {
+        return jsonResponse({ name: "edgetunnel-core", version: VERSION });
+      }
+      return textResponse(`edgetunnel core ${VERSION} is running`);
+    } catch (error) {
+      const appError = asAppError(error);
+      return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
     }
-    const url = new URL(request.url);
-    if (isApiRequest(url, request)) {
-      return handleApiRequest(request, env, ctx);
-    }
-    if (isDataFlowRequest(request)) {
-      return handleDataFlowRequest(request, env, ctx);
-    }
-    return textResponse("edgetunnel core is running", 200);
   }
 };
-function isValidRuntimeEnv(env) {
-  return Boolean(env?.DB) && isValidUuidV4(env?.ID);
-}
-function isApiRequest(url, request) {
-  if (url.pathname.startsWith("/api/")) return true;
-  if (url.pathname === "/login") return true;
-  if (url.pathname === "/admin") return true;
-  if (url.pathname === "/sub") return true;
-  if (request.headers.get("accept")?.includes("application/json")) return true;
-  return false;
-}
-function isDataFlowRequest(request) {
-  const upgrade = request.headers.get("upgrade") || "";
-  const contentType = request.headers.get("content-type") || "";
-  if (upgrade.toLowerCase() === "websocket") return true;
-  if (contentType.includes("application/grpc")) return true;
-  if (contentType.includes("application/x-http")) return true;
-  if (request.method === "POST" && request.body) return true;
-  return false;
-}
 export {
   index_default as default
 };

@@ -1,0 +1,12 @@
+name = "edgetunnel-core"
+main = "_worker.js"
+compatibility_date = "2026-07-31"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "replace-with-your-database-name"
+database_id = "replace-with-your-database-id"
+
+# Set bootstrap credentials as encrypted secrets for the first request, then remove them:
+# wrangler secret put BOOTSTRAP_ADMIN_USER
+# wrangler secret put BOOTSTRAP_ADMIN_PASSWORD

@@ -1,0 +1,13 @@
+{
+  "name": "edgetunnel-v4-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-single.mjs",
+    "check": "node --check src/index.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.8"
+  }
+}

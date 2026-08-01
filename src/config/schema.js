@@ -24,8 +24,8 @@ export function normalizeUserConfig(input, fallback = {}) {
 export function normalizeGlobalConfig(input, fallback = {}) {
   const config = input && typeof input === 'object' ? input : {};
   const hosts = normalizeHosts(config.HOSTS ?? fallback.HOSTS ?? [fallback.siteName || 'edgetunnel']);
-  const proxyGroup = normalizeProxyGroup(config.反代 ?? fallback.反代);
-  const nodeGroup = normalizeNodeGroup(config.节点参数 ?? fallback.节点参数);
+  const proxyGroup = normalizeProxyGroup(config.反代, fallback.反代);
+  const nodeGroup = normalizeNodeGroup(config.节点参数, fallback.节点参数);
 
   const protocol = normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL);
   const transport = normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT);
@@ -40,7 +40,7 @@ export function normalizeGlobalConfig(input, fallback = {}) {
     HOST: String(config.HOST || fallback.HOST || hosts[0] || 'edgetunnel'),
     HOSTS: hosts,
     订阅参数: String(config.订阅参数 ?? fallback.订阅参数 ?? ''),
-    订阅转换: normalizeSubConverter(config.订阅转换),
+    订阅转换: normalizeSubConverter(config.订阅转换, fallback.订阅转换),
     反代: proxyGroup,
     节点参数: nodeGroup,
     ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
@@ -84,38 +84,41 @@ function normalizeHosts(value) {
   return hosts.length ? [...new Set(hosts)] : ['edgetunnel'];
 }
 
-function normalizeProxyGroup(value) {
+function normalizeProxyGroup(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
   const MODES = new Set(['', 'proxyip', 'socks5', 'auto']);
-  const mode = normalizeEnum(config.模式, MODES, '');
+  const mode = normalizeEnum(config.模式 ?? base.模式, MODES, '');
   return {
     模式: mode,
-    PROXYIP: mode ? String(config.PROXYIP || 'auto') : '',
-    SOCKS5: mode === 'socks5' || mode === 'auto' ? normalizeSocks5Config(config.SOCKS5) : { 启用: null, 全局: false, 账号: '', 白名单: [] },
+    PROXYIP: mode ? String(config.PROXYIP || base.PROXYIP || 'auto') : '',
+    SOCKS5: mode === 'socks5' || mode === 'auto' ? normalizeSocks5Config(config.SOCKS5, base.SOCKS5) : { 启用: null, 全局: false, 账号: '', 白名单: [] },
   };
 }
 
-function normalizeNodeGroup(value) {
+function normalizeNodeGroup(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
   return {
-    Fingerprint: normalizeFingerprint(config.Fingerprint),
-    随机路径: Boolean(config.随机路径 ?? false),
-    启用0RTT: Boolean(config.启用0RTT ?? false),
-    TLS分片: normalizeTlsFragment(config.TLS分片),
-    节点数量: normalizeInt(config.节点数量, 16, 1, 64),
-    优选IP: normalizeOptimizedIP(config.优选IP),
+    Fingerprint: normalizeFingerprint(config.Fingerprint ?? base.Fingerprint),
+    随机路径: Boolean(config.随机路径 ?? base.随机路径 ?? false),
+    启用0RTT: Boolean(config.启用0RTT ?? base.启用0RTT ?? false),
+    TLS分片: normalizeTlsFragment(config.TLS分片 ?? base.TLS分片),
+    节点数量: normalizeInt(config.节点数量 ?? base.节点数量, 16, 1, 64),
+    优选IP: normalizeOptimizedIP(config.优选IP, base.优选IP),
   };
 }
 
-function normalizeOptimizedIP(value) {
+function normalizeOptimizedIP(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
   const MODES = new Set(['', 'optimized', 'random', 'custom']);
-  const mode = normalizeEnum(config.模式, MODES, '');
+  const mode = normalizeEnum(config.模式 ?? base.模式, MODES, '');
   return {
     模式: mode,
-    随机端口: Boolean(config.随机端口 ?? true),
-    自定义IP源: mode === 'custom' ? String(config.自定义IP源 || '').trim() : '',
-    优选网站URL: mode === 'custom' ? String(config.优选网站URL || '').trim() : '',
+    随机端口: Boolean(config.随机端口 ?? base.随机端口 ?? true),
+    自定义IP源: mode === 'custom' ? String(config.自定义IP源 ?? base.自定义IP源 ?? '').trim() : '',
+    优选网站URL: mode === 'custom' ? String(config.优选网站URL ?? base.优选网站URL ?? '').trim() : '',
   };
 }
 
@@ -135,33 +138,31 @@ function normalizeTlsFragment(value) {
   return text || null;
 }
 
-function normalizeProxyIP(value) {
-  const text = String(value ?? '').trim();
-  return text || 'auto';
-}
-
-function normalizeSocks5Config(value) {
+function normalizeSocks5Config(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
+  const 白名单 = config.白名单 ?? base.白名单;
   return {
-    启用: config.启用 ?? null,
-    全局: Boolean(config.全局 ?? false),
-    账号: String(config.账号 || ''),
-    白名单: Array.isArray(config.白名单) ? config.白名单.map((item) => String(item || '').trim()).filter(Boolean) : [],
+    启用: config.启用 ?? base.启用 ?? null,
+    全局: Boolean(config.全局 ?? base.全局 ?? false),
+    账号: String(config.账号 ?? base.账号 ?? ''),
+    白名单: Array.isArray(白名单) ? 白名单.map((item) => String(item || '').trim()).filter(Boolean) : [],
   };
 }
 
-function normalizeSubConverter(value) {
+function normalizeSubConverter(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
   return {
-    SUBAPI: String(config.SUBAPI || config.subapi || '').trim() || 'https://SUBAPI.cmliussss.net',
-    emoji: Boolean(config.emoji ?? true),
-    list: Boolean(config.list ?? false),
-    udp: Boolean(config.udp ?? true),
-    xudp: Boolean(config.xudp ?? false),
-    tls13: Boolean(config.tls13 ?? true),
-    append_type: Boolean(config.append_type ?? false),
-    sort: Boolean(config.sort ?? false),
-    config: String(config.config || ''),
+    SUBAPI: String(config.SUBAPI || config.subapi || base.SUBAPI || base.subapi || '').trim() || 'https://SUBAPI.cmliussss.net',
+    emoji: Boolean(config.emoji ?? base.emoji ?? true),
+    list: Boolean(config.list ?? base.list ?? false),
+    udp: Boolean(config.udp ?? base.udp ?? true),
+    xudp: Boolean(config.xudp ?? base.xudp ?? false),
+    tls13: Boolean(config.tls13 ?? base.tls13 ?? true),
+    append_type: Boolean(config.append_type ?? base.append_type ?? false),
+    sort: Boolean(config.sort ?? base.sort ?? false),
+    config: String(config.config ?? base.config ?? ''),
   };
 }
 

@@ -1,17 +1,36 @@
 // edgetunnel-core 3.0.0
+// src/core/errors.js
+var AppError = class extends Error {
+  constructor(code, status = 400, message = code, details = null) {
+    super(message);
+    this.name = "AppError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+};
+function asAppError(error) {
+  if (error instanceof AppError) return error;
+  return new AppError("INTERNAL_ERROR", 500, "internal error");
+}
+
 // src/config/loader.js
 async function getGlobalConfig(env) {
-  const row = await env.DB.prepare("SELECT value FROM global_config WHERE key = ?").bind("global").first();
-  return parseJson(row?.value, {});
+  if (!env.KV) return {};
+  try {
+    const value = await env.KV.get("global_config", "text");
+    return parseJson(value, {});
+  } catch {
+    return {};
+  }
 }
 async function putGlobalConfig(env, config) {
-  await env.DB.prepare(`
-    INSERT INTO global_config (key, value, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET
-      value = excluded.value,
-      updated_at = excluded.updated_at
-  `).bind("global", JSON.stringify(config), (/* @__PURE__ */ new Date()).toISOString()).run();
+  if (!env.KV) throw new AppError("CONFIG_STORAGE_UNAVAILABLE", 503, "KV \u672A\u7ED1\u5B9A\uFF0C\u914D\u7F6E\u65E0\u6CD5\u4FDD\u5B58");
+  try {
+    await env.KV.put("global_config", JSON.stringify(config));
+  } catch (error) {
+    throw new AppError("CONFIG_WRITE_FAILED", 502, `\u914D\u7F6E\u5199\u5165\u5931\u8D25: ${error.message}`);
+  }
   return config;
 }
 function parseJson(value, fallback) {
@@ -33,8 +52,8 @@ var DEFAULT_ECH_SNI = "cloudflare-ech.com";
 function normalizeGlobalConfig(input, fallback = {}) {
   const config = input && typeof input === "object" ? input : {};
   const hosts = normalizeHosts(config.HOSTS ?? fallback.HOSTS ?? [fallback.siteName || "edgetunnel"]);
-  const proxyGroup = normalizeProxyGroup(config.\u53CD\u4EE3 ?? fallback.\u53CD\u4EE3);
-  const nodeGroup = normalizeNodeGroup(config.\u8282\u70B9\u53C2\u6570 ?? fallback.\u8282\u70B9\u53C2\u6570);
+  const proxyGroup = normalizeProxyGroup(config.\u53CD\u4EE3, fallback.\u53CD\u4EE3);
+  const nodeGroup = normalizeNodeGroup(config.\u8282\u70B9\u53C2\u6570, fallback.\u8282\u70B9\u53C2\u6570);
   const protocol = normalizeEnum(config.protocol || config.defaultProtocol, PROTOCOLS, fallback.protocol || fallback.defaultProtocol || DEFAULT_PROTOCOL);
   const transport = normalizeEnum(config.transport || config.defaultTransport, TRANSPORTS, fallback.transport || fallback.defaultTransport || DEFAULT_TRANSPORT);
   return {
@@ -47,6 +66,7 @@ function normalizeGlobalConfig(input, fallback = {}) {
     HOST: String(config.HOST || fallback.HOST || hosts[0] || "edgetunnel"),
     HOSTS: hosts,
     \u8BA2\u9605\u53C2\u6570: String(config.\u8BA2\u9605\u53C2\u6570 ?? fallback.\u8BA2\u9605\u53C2\u6570 ?? ""),
+    \u8BA2\u9605\u8F6C\u6362: normalizeSubConverter(config.\u8BA2\u9605\u8F6C\u6362, fallback.\u8BA2\u9605\u8F6C\u6362),
     \u53CD\u4EE3: proxyGroup,
     \u8282\u70B9\u53C2\u6570: nodeGroup,
     ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
@@ -71,21 +91,45 @@ function normalizeHosts(value) {
   const hosts = items.flatMap((item) => String(item || "").split(/[\n,，]/g)).map((item) => item.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].split(":")[0]).filter(Boolean);
   return hosts.length ? [...new Set(hosts)] : ["edgetunnel"];
 }
-function normalizeProxyGroup(value) {
+function normalizeProxyGroup(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
+  const MODES = /* @__PURE__ */ new Set(["", "proxyip", "socks5", "auto"]);
+  const mode = normalizeEnum(config.\u6A21\u5F0F ?? base.\u6A21\u5F0F, MODES, "");
   return {
-    PROXYIP: String(config.PROXYIP || "auto"),
-    SOCKS5: normalizeSocks5Config(config.SOCKS5)
+    \u6A21\u5F0F: mode,
+    PROXYIP: mode ? String(config.PROXYIP || base.PROXYIP || "auto") : "",
+    SOCKS5: mode === "socks5" || mode === "auto" ? normalizeSocks5Config(config.SOCKS5, base.SOCKS5) : { \u542F\u7528: null, \u5168\u5C40: false, \u8D26\u53F7: "", \u767D\u540D\u5355: [] }
   };
 }
-function normalizeNodeGroup(value) {
+function normalizeNodeGroup(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
   return {
-    Fingerprint: normalizeFingerprint(config.Fingerprint),
-    \u968F\u673A\u8DEF\u5F84: Boolean(config.\u968F\u673A\u8DEF\u5F84 ?? false),
-    \u542F\u75280RTT: Boolean(config.\u542F\u75280RTT ?? false),
-    TLS\u5206\u7247: normalizeTlsFragment(config.TLS\u5206\u7247)
+    Fingerprint: normalizeFingerprint(config.Fingerprint ?? base.Fingerprint),
+    \u968F\u673A\u8DEF\u5F84: Boolean(config.\u968F\u673A\u8DEF\u5F84 ?? base.\u968F\u673A\u8DEF\u5F84 ?? false),
+    \u542F\u75280RTT: Boolean(config.\u542F\u75280RTT ?? base.\u542F\u75280RTT ?? false),
+    TLS\u5206\u7247: normalizeTlsFragment(config.TLS\u5206\u7247 ?? base.TLS\u5206\u7247),
+    \u8282\u70B9\u6570\u91CF: normalizeInt(config.\u8282\u70B9\u6570\u91CF ?? base.\u8282\u70B9\u6570\u91CF, 16, 1, 64),
+    \u4F18\u9009IP: normalizeOptimizedIP(config.\u4F18\u9009IP, base.\u4F18\u9009IP)
   };
+}
+function normalizeOptimizedIP(value, fallback) {
+  const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
+  const MODES = /* @__PURE__ */ new Set(["", "optimized", "random", "custom"]);
+  const mode = normalizeEnum(config.\u6A21\u5F0F ?? base.\u6A21\u5F0F, MODES, "");
+  return {
+    \u6A21\u5F0F: mode,
+    \u968F\u673A\u7AEF\u53E3: Boolean(config.\u968F\u673A\u7AEF\u53E3 ?? base.\u968F\u673A\u7AEF\u53E3 ?? true),
+    \u81EA\u5B9A\u4E49IP\u6E90: mode === "custom" ? String(config.\u81EA\u5B9A\u4E49IP\u6E90 ?? base.\u81EA\u5B9A\u4E49IP\u6E90 ?? "").trim() : "",
+    \u4F18\u9009\u7F51\u7AD9URL: mode === "custom" ? String(config.\u4F18\u9009\u7F51\u7AD9URL ?? base.\u4F18\u9009\u7F51\u7AD9URL ?? "").trim() : ""
+  };
+}
+function normalizeInt(value, fallback, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) {
+  const n = Number.parseInt(value, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 }
 function normalizeFingerprint(value) {
   const text = String(value || "").trim();
@@ -95,13 +139,30 @@ function normalizeTlsFragment(value) {
   const text = String(value || "").trim();
   return text || null;
 }
-function normalizeSocks5Config(value) {
+function normalizeSocks5Config(value, fallback) {
   const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
+  const \u767D\u540D\u5355 = config.\u767D\u540D\u5355 ?? base.\u767D\u540D\u5355;
   return {
-    \u542F\u7528: config.\u542F\u7528 ?? null,
-    \u5168\u5C40: Boolean(config.\u5168\u5C40 ?? false),
-    \u8D26\u53F7: String(config.\u8D26\u53F7 || ""),
-    \u767D\u540D\u5355: Array.isArray(config.\u767D\u540D\u5355) ? config.\u767D\u540D\u5355.map((item) => String(item || "").trim()).filter(Boolean) : []
+    \u542F\u7528: config.\u542F\u7528 ?? base.\u542F\u7528 ?? null,
+    \u5168\u5C40: Boolean(config.\u5168\u5C40 ?? base.\u5168\u5C40 ?? false),
+    \u8D26\u53F7: String(config.\u8D26\u53F7 ?? base.\u8D26\u53F7 ?? ""),
+    \u767D\u540D\u5355: Array.isArray(\u767D\u540D\u5355) ? \u767D\u540D\u5355.map((item) => String(item || "").trim()).filter(Boolean) : []
+  };
+}
+function normalizeSubConverter(value, fallback) {
+  const config = normalizeObject(value);
+  const base = normalizeObject(fallback);
+  return {
+    SUBAPI: String(config.SUBAPI || config.subapi || base.SUBAPI || base.subapi || "").trim() || "https://SUBAPI.cmliussss.net",
+    emoji: Boolean(config.emoji ?? base.emoji ?? true),
+    list: Boolean(config.list ?? base.list ?? false),
+    udp: Boolean(config.udp ?? base.udp ?? true),
+    xudp: Boolean(config.xudp ?? base.xudp ?? false),
+    tls13: Boolean(config.tls13 ?? base.tls13 ?? true),
+    append_type: Boolean(config.append_type ?? base.append_type ?? false),
+    sort: Boolean(config.sort ?? base.sort ?? false),
+    config: String(config.config ?? base.config ?? "")
   };
 }
 function normalizeECHConfig(value, fallback = {}) {
@@ -265,20 +326,6 @@ function createAdmissionDependencies(env) {
     usage: createUsageRepository(env),
     config: createRuntimeConfigService(env)
   };
-}
-
-// src/core/errors.js
-var AppError = class extends Error {
-  constructor(code, status = 400, message = code) {
-    super(message);
-    this.name = "AppError";
-    this.code = code;
-    this.status = status;
-  }
-};
-function asAppError(error) {
-  if (error instanceof AppError) return error;
-  return new AppError("INTERNAL_ERROR", 500, "internal error");
 }
 
 // src/core/types.js
@@ -565,7 +612,7 @@ async function verifyPassword(password, encoded) {
 }
 function validatePassword(password) {
   const value = String(password || "");
-  if (value.length < 10 || value.length > 256) throw new TypeError("PASSWORD_LENGTH_INVALID");
+  if (value.length < 10 || value.length > 256) throw new AppError("PASSWORD_LENGTH_INVALID", 400, "\u5BC6\u7801\u957F\u5EA6\u5FC5\u987B\u4E3A 10-256 \u4E2A\u5B57\u7B26");
 }
 async function derive(password, salt, iterations, length = 32) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -861,7 +908,13 @@ function createUserService(repository) {
         createdAt: now,
         updatedAt: now
       };
-      await repository.create(user);
+      if (await repository.getByUsername(username)) throw new AppError("USERNAME_TAKEN", 409, "\u7528\u6237\u540D\u5DF2\u5B58\u5728");
+      try {
+        await repository.create(user);
+      } catch (error) {
+        if (/UNIQUE|constraint/i.test(String(error?.message))) throw new AppError("USERNAME_TAKEN", 409, "\u7528\u6237\u540D\u5DF2\u5B58\u5728");
+        throw error;
+      }
       return publicUser(user);
     },
     async update(userID, fields, actor) {
@@ -912,7 +965,7 @@ function createGovernanceService(env) {
   return {
     async ban(userID, input = {}) {
       const reason = String(input.reason || "");
-      const until = input.until ? new Date(input.until).toISOString() : null;
+      const until = input.until ? parseUntil(input.until) : null;
       const createdAt = (/* @__PURE__ */ new Date()).toISOString();
       await env.DB.prepare(`INSERT INTO bans (user_id,reason,until,created_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason,until=excluded.until,created_at=excluded.created_at`).bind(userID, reason, until, createdAt).run();
       return { userID, reason, until, createdAt };
@@ -924,6 +977,11 @@ function createGovernanceService(env) {
       return env.DB.prepare("SELECT user_id AS userID,reason,until,created_at AS createdAt FROM bans WHERE user_id = ?").bind(userID).first();
     }
   };
+}
+function parseUntil(value) {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) throw new AppError("BAN_UNTIL_INVALID", 400, "\u5C01\u7981\u622A\u6B62\u65F6\u95F4\u683C\u5F0F\u65E0\u6548");
+  return new Date(timestamp).toISOString();
 }
 function validateBanTarget(user) {
   if (!user) throw new AppError("USER_NOT_FOUND", 404);
@@ -948,6 +1006,212 @@ function textResponse(body, status = 200, headers = {}) {
       ...headers
     }
   });
+}
+
+// src/net/operator.js
+var ASN_MAP = {
+  "4134": "ct",
+  "4809": "ct",
+  "4811": "ct",
+  "4812": "ct",
+  "4815": "ct",
+  "4837": "cu",
+  "4814": "cu",
+  "9929": "cu",
+  "17623": "cu",
+  "17816": "cu",
+  "9808": "cmcc",
+  "24400": "cmcc",
+  "56040": "cmcc",
+  "56041": "cmcc",
+  "56044": "cmcc"
+};
+var KEYWORD_RULES = [
+  { code: "ct", pattern: /chinanet|chinatelecom|china telecom|cn2|shtel/ },
+  { code: "cmcc", pattern: /cmi|cmnet|chinamobile|china mobile|cmcc|mobile communications/ },
+  { code: "cu", pattern: /china169|china unicom|chinaunicom|cucc|cncgroup|cuii|netcom/ }
+];
+function identifyOperator(cf) {
+  if (!cf || typeof cf !== "object") return "cf";
+  if (String(cf.country || "").toLowerCase() !== "cn") return "cf";
+  const org = String(cf.asOrganization || "").toLowerCase();
+  for (const rule of KEYWORD_RULES) {
+    if (rule.pattern.test(org)) return rule.code;
+  }
+  return ASN_MAP[String(cf.asn || "")] || "cf";
+}
+
+// src/net/cidr.js
+var CACHE_TTL_MS = 36e5;
+var cache = /* @__PURE__ */ new Map();
+var GITHUB_RAW = "https://raw.githubusercontent.com/cmliu/cmliu/main";
+var FALLBACK_CIDRS = Object.freeze([
+  "104.16.0.0/13",
+  "172.64.0.0/13",
+  "162.158.0.0/15",
+  "198.41.128.0/17"
+]);
+var OPERATOR_FILE = Object.freeze({
+  ct: "CF-CIDR/ct.txt",
+  cu: "CF-CIDR/cu.txt",
+  cmcc: "CF-CIDR/cmcc.txt",
+  cf: "CF-CIDR.txt"
+});
+async function getCIDRList(operator, options = {}) {
+  const key = OPERATOR_FILE[operator];
+  if (!key) return [...FALLBACK_CIDRS];
+  const now = Date.now();
+  const entry = cache.get(key);
+  if (entry && now - entry.timestamp < CACHE_TTL_MS) return entry.cidrs;
+  try {
+    const fetcher = options.fetch || globalThis.fetch;
+    const url = `${GITHUB_RAW}/${key}`;
+    const res = await fetcher(url);
+    if (!res.ok) return await useFallback(key, entry);
+    const text = await res.text();
+    const cidrs = parseCIDRText(text);
+    if (cidrs.length === 0) return await useFallback(key, entry);
+    cache.set(key, { cidrs, timestamp: now });
+    return cidrs;
+  } catch {
+    return await useFallback(key, entry);
+  }
+}
+function parseCIDRText(text) {
+  return text.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/.test(line));
+}
+async function useFallback(key, entry) {
+  if (entry) {
+    cache.set(key, { cidrs: entry.cidrs, timestamp: Date.now() });
+    return entry.cidrs;
+  }
+  return [...FALLBACK_CIDRS];
+}
+
+// src/net/ip-pool.js
+var CF_PORTS = Object.freeze([443, 2053, 2083, 2087, 2096, 8443]);
+var OPERATOR_LABEL = Object.freeze({
+  cmcc: "\u{1F1E8}\u{1F1F3} \u4E2D\u56FD\u79FB\u52A8\u4F18\u9009",
+  ct: "\u{1F1E8}\u{1F1F3} \u4E2D\u56FD\u7535\u4FE1\u4F18\u9009",
+  cu: "\u{1F1E8}\u{1F1F3} \u4E2D\u56FD\u8054\u901A\u4F18\u9009",
+  cf: "\u{1F310} \u56FD\u9645\u4F18\u9009"
+});
+function generateIPs(cidrs, count, options = {}) {
+  if (!Array.isArray(cidrs) || cidrs.length === 0) return [];
+  if (!Number.isInteger(count) || count < 1) return [];
+  const ports = options.ports || CF_PORTS;
+  const results = [];
+  for (let i = 0; i < count; i++) {
+    const cidr = cidrs[Math.floor(Math.random() * cidrs.length)];
+    const range = parseCIDR(cidr);
+    if (!range) continue;
+    const ip = randomIPInRange(range.baseIP, range.hostBits);
+    const port = ports[Math.floor(Math.random() * ports.length)];
+    results.push(`${ip}:${port}`);
+  }
+  return results;
+}
+function parseCustomIPs(text) {
+  if (!text) return null;
+  const results = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const hashIndex = trimmed.indexOf("#");
+    const namePart = hashIndex !== -1 ? trimmed.slice(hashIndex + 1).trim() : "";
+    const ipPart = hashIndex !== -1 ? trimmed.slice(0, hashIndex).trim() : trimmed;
+    if (!ipPart) continue;
+    const entry = parseIPEntry(ipPart);
+    if (!entry) continue;
+    if (namePart) results.push({ ...entry, name: namePart });
+    else results.push(entry);
+  }
+  return results.length ? results : null;
+}
+function parseIPEntry(text) {
+  if (!text) return null;
+  const m = text.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d{1,5}))?$/);
+  if (!m) return null;
+  const octets = m[1].split(".").map(Number);
+  if (octets.some((o) => o < 0 || o > 255)) return null;
+  if (m[2]) {
+    const port = parseInt(m[2], 10);
+    if (port < 1 || port > 65535) return null;
+    return { address: m[1], port };
+  }
+  return { address: m[1], port: null };
+}
+async function fetchCustomIPs(url, options = {}) {
+  const fetcher = options.fetch || globalThis.fetch;
+  let text;
+  try {
+    const res = await fetcher(url);
+    if (!res.ok) return null;
+    text = await res.text();
+  } catch {
+    return null;
+  }
+  return parseCustomIPs(text);
+}
+function pickPort(useRandomPort) {
+  if (useRandomPort) return CF_PORTS[Math.floor(Math.random() * CF_PORTS.length)];
+  return 443;
+}
+var CF_CIDRS = Object.freeze([
+  { base: ipToInt("104.16.0.0"), bits: 13 },
+  { base: ipToInt("172.64.0.0"), bits: 13 },
+  { base: ipToInt("162.158.0.0"), bits: 15 },
+  { base: ipToInt("198.41.128.0"), bits: 17 },
+  { base: ipToInt("188.114.96.0"), bits: 20 },
+  { base: ipToInt("173.245.48.0"), bits: 20 }
+]);
+function isCloudflareIP(ip) {
+  const target = ipToInt(ip);
+  if (target == null) return false;
+  for (const cidr of CF_CIDRS) {
+    const mask = ~((1 << 32 - cidr.bits) - 1) >>> 0;
+    if ((target & mask) === (cidr.base & mask)) return true;
+  }
+  return false;
+}
+function generateNodeName(name, operator, index) {
+  if (name) return name;
+  const label = OPERATOR_LABEL[operator] || OPERATOR_LABEL.cf;
+  return `${label}${index}`;
+}
+function parseCIDR(cidr) {
+  const parts = cidr.split("/");
+  if (parts.length !== 2) return null;
+  const prefix = parseInt(parts[1], 10);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+  const baseIP = ipToInt(parts[0]);
+  if (baseIP == null) return null;
+  return { baseIP, hostBits: 32 - prefix };
+}
+function ipToInt(ip) {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (const part of parts) {
+    const octet = parseInt(part, 10);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+    result = result << 8 | octet;
+  }
+  return result >>> 0;
+}
+function intToIP(value) {
+  return [
+    value >>> 24 & 255,
+    value >>> 16 & 255,
+    value >>> 8 & 255,
+    value & 255
+  ].join(".");
+}
+function randomIPInRange(baseIP, hostBits) {
+  if (hostBits <= 0) return intToIP(baseIP);
+  const maxOffset = 2 ** hostBits;
+  const offset = Math.floor(Math.random() * maxOffset);
+  return intToIP(baseIP + offset >>> 0);
 }
 
 // src/api-v2/router.js
@@ -1001,15 +1265,17 @@ function createApiRouter({ users, sessions }) {
       }
       if (url.pathname === "/api/admin/config" && request.method === "PATCH") {
         requireAdmin(current);
-        const config = normalizeGlobalConfig(await readBody(request), await getGlobalConfig(env));
+        const body = await readBody(request);
+        await validateProxyConfig(body, request);
+        const config = normalizeGlobalConfig(body, await getGlobalConfig(env));
         await putGlobalConfig(env, config);
         return jsonResponse({ ok: true, config });
       }
-      if (url.pathname === "/api/users/me/subscription" && request.method === "GET") return textResponse(await buildSubscription(env, requireUser(current), url));
+      if (url.pathname === "/api/users/me/subscription" && request.method === "GET") return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError("NOT_FOUND", 404);
     } catch (error) {
       const appError = asAppError(error);
-      return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
+      return jsonResponse({ ok: false, error: appError.code, message: appError.message, ...appError.details ? { details: appError.details } : {} }, appError.status);
     }
   };
 }
@@ -1021,7 +1287,8 @@ async function readBody(request) {
     throw new AppError("INVALID_JSON", 400);
   }
 }
-async function buildSubscription(env, user, url) {
+async function buildSubscription(env, user, request) {
+  const url = new URL(request.url);
   const config = normalizeGlobalConfig(await getGlobalConfig(env));
   const protocols = config.protocols.map((protocol) => protocol === "vless" ? { protocol, uuid: user.userID } : { protocol, password: user.trojanSecret });
   const transports = config.transports.map((transport) => ({
@@ -1037,7 +1304,62 @@ async function buildSubscription(env, user, url) {
     return { ...node, path: params.path, query: params.query };
   });
   if (config.ECH) nodes = nodes.map((node) => withECH(node, { enabled: true, ...config.ECHConfig }));
-  return generateSubscription(nodes);
+  const nodeCount = config.\u8282\u70B9\u53C2\u6570?.\u8282\u70B9\u6570\u91CF || 16;
+  const optIP = config.\u8282\u70B9\u53C2\u6570?.\u4F18\u9009IP;
+  if (optIP?.\u6A21\u5F0F) {
+    const replacements = await resolveIPReplacements(optIP, request, nodeCount);
+    if (replacements && replacements.length > 0) {
+      nodes = nodes.map((node, i) => {
+        const rep = replacements[i % replacements.length];
+        return { ...node, address: rep.address, port: rep.port };
+      });
+    }
+  }
+  let sub = generateSubscription(nodes);
+  const target = url.searchParams.get("target");
+  if (target && config.\u8BA2\u9605\u8F6C\u6362?.SUBAPI) {
+    const rawURL = `${url.protocol}//${url.host}${url.pathname}?${url.searchParams.toString()}`;
+    const convertURL = `${config.\u8BA2\u9605\u8F6C\u6362.SUBAPI}/sub?target=${encodeURIComponent(target)}&url=${encodeURIComponent(rawURL)}`;
+    try {
+      const res = await fetch(convertURL);
+      if (res.ok) sub = await res.text();
+    } catch {
+    }
+  }
+  return sub;
+}
+async function resolveIPReplacements(optIP, request, nodeCount = 16) {
+  const operator = identifyOperator(request.cf);
+  const randomPort = optIP.\u968F\u673A\u7AEF\u53E3;
+  if (optIP.\u6A21\u5F0F === "custom") {
+    let entries;
+    if (optIP.\u4F18\u9009\u7F51\u7AD9URL) {
+      entries = await fetchCustomIPs(optIP.\u4F18\u9009\u7F51\u7AD9URL);
+    } else if (optIP.\u81EA\u5B9A\u4E49IP\u6E90) {
+      entries = /^https?:\/\//i.test(optIP.\u81EA\u5B9A\u4E49IP\u6E90) ? await fetchCustomIPs(optIP.\u81EA\u5B9A\u4E49IP\u6E90) : parseCustomIPs(optIP.\u81EA\u5B9A\u4E49IP\u6E90);
+    }
+    if (entries) {
+      return entries.map((entry, i) => ({
+        address: entry.address,
+        port: entry.port ?? pickPort(randomPort),
+        name: generateNodeName(entry.name, operator, i + 1)
+      }));
+    }
+    const fallback = await getCIDRList("cf");
+    if (!fallback || fallback.length === 0) return null;
+    const ips2 = generateIPs(fallback, nodeCount, { ports: randomPort ? void 0 : [443] });
+    return ips2.map((ip, i) => {
+      const [address, port] = ip.split(":");
+      return { address, port: Number(port), name: `Ip\u83B7\u53D6\u5931\u8D25${i + 1}` };
+    });
+  }
+  const cidrs = optIP.\u6A21\u5F0F === "optimized" ? await getCIDRList(operator) : await getCIDRList("cf");
+  if (!cidrs || cidrs.length === 0) return null;
+  const ips = generateIPs(cidrs, nodeCount, { ports: randomPort ? void 0 : [443] });
+  return ips.map((ip, i) => {
+    const [address, port] = ip.split(":");
+    return { address, port: Number(port), name: generateNodeName(void 0, operator, i + 1) };
+  });
 }
 function randomPathSegment() {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
@@ -1047,6 +1369,40 @@ function loginFingerprint(request, username) {
   const address = request.headers.get("cf-connecting-ip") || "unknown";
   const normalized = String(username || "").trim().toLowerCase();
   return `${address}:${normalized}`;
+}
+async function validateProxyConfig(body, request) {
+  const proxy = body?.\u53CD\u4EE3;
+  if (!proxy?.\u6A21\u5F0F) return;
+  const socks = proxy.SOCKS5;
+  if (proxy.\u6A21\u5F0F === "socks5" && socks?.\u5168\u5C40) {
+    if (!socks.\u8D26\u53F7) throw new AppError("PROXY_CONFIG_INVALID", 400, "\u5168\u5C40\u4EE3\u7406\u6A21\u5F0F\u5FC5\u987B\u586B\u5199\u4EE3\u7406\u8D26\u53F7");
+    const connect2 = request.fetcher?.connect?.bind(request.fetcher);
+    if (!connect2) throw new AppError("PROXY_TEST_FAILED", 400, "\u65E0\u6CD5\u83B7\u53D6\u7F51\u7EDC\u8FDE\u63A5");
+    const addr = typeof socks.\u8D26\u53F7 === "object" ? socks.\u8D26\u53F7 : parseProxyAccount(socks.\u8D26\u53F7);
+    if (!addr?.hostname) throw new AppError("PROXY_CONFIG_INVALID", 400, "\u4EE3\u7406\u8D26\u53F7\u683C\u5F0F\u65E0\u6548");
+    try {
+      const socket = connect2({ hostname: addr.hostname, port: addr.port || 1080 });
+      if (socket.opened) {
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5e3));
+        await Promise.race([socket.opened, timeout]);
+      }
+      socket.close().catch(() => {
+      });
+    } catch (err) {
+      throw new AppError("PROXY_UNREACHABLE", 400, `\u4EE3\u7406\u670D\u52A1\u5668\u65E0\u6CD5\u8FDE\u63A5: ${err.message}`);
+    }
+  }
+}
+function parseProxyAccount(value) {
+  const text = String(value || "").trim();
+  const atIndex = text.lastIndexOf("@");
+  if (atIndex !== -1) {
+    const hostPart = text.slice(atIndex + 1);
+    const [hostname2, port2] = hostPart.split(":");
+    return { hostname: hostname2, port: port2 ? parseInt(port2, 10) : 1080 };
+  }
+  const [hostname, port] = text.split(":");
+  return { hostname, port: port ? parseInt(port, 10) : 1080 };
 }
 
 // src/auth/bootstrap.js
@@ -1121,7 +1477,218 @@ function createDirectConnector(connectImpl = connect) {
   };
 }
 
+// src/connector/socks5.js
+async function socks5Connect(socket, target, credentials) {
+  const writer = socket.writable.getWriter();
+  const reader = socket.readable.getReader();
+  const buffer = { data: new Uint8Array(0) };
+  async function read(n) {
+    while (buffer.data.byteLength < n) {
+      const { done, value } = await reader.read();
+      if (done || !value) throw new Error("SOCKS5 connection closed prematurely");
+      const merged = new Uint8Array(buffer.data.byteLength + value.byteLength);
+      merged.set(buffer.data);
+      merged.set(value, buffer.data.byteLength);
+      buffer.data = merged;
+    }
+    const result = buffer.data.slice(0, n);
+    buffer.data = buffer.data.slice(n);
+    return result;
+  }
+  try {
+    const { username, password, hostname, port } = credentials || {};
+    const hasAuth = Boolean(username && password);
+    const methods = hasAuth ? new Uint8Array([5, 2, 0, 2]) : new Uint8Array([5, 1, 0]);
+    await writer.write(methods);
+    const methodResp = await read(2);
+    if (methodResp[0] !== 5) throw new Error("SOCKS5 invalid version");
+    if (methodResp[1] === 2) {
+      if (!hasAuth) throw new Error("SOCKS5 server requires authentication");
+      const u = new TextEncoder().encode(username);
+      const p = new TextEncoder().encode(password);
+      const authReq = new Uint8Array(1 + 1 + u.length + 1 + p.length);
+      authReq[0] = 1;
+      authReq[1] = u.length;
+      authReq.set(u, 2);
+      authReq[2 + u.length] = p.length;
+      authReq.set(p, 3 + u.length);
+      await writer.write(authReq);
+      const authResp = await read(2);
+      if (authResp[0] !== 1 || authResp[1] !== 0) throw new Error("SOCKS5 authentication failed");
+    } else if (methodResp[1] !== 0) {
+      throw new Error(`SOCKS5 unsupported auth method: ${methodResp[1]}`);
+    }
+    const hostBytes = new TextEncoder().encode(target.hostname);
+    const req = new Uint8Array(4 + 1 + hostBytes.length + 2);
+    req[0] = 5;
+    req[1] = 1;
+    req[2] = 0;
+    req[3] = 3;
+    req[4] = hostBytes.length;
+    req.set(hostBytes, 5);
+    req[5 + hostBytes.length] = target.port >> 8 & 255;
+    req[5 + hostBytes.length + 1] = target.port & 255;
+    await writer.write(req);
+    const resp = await read(4);
+    if (resp[0] !== 5 || resp[1] !== 0) throw new Error(`SOCKS5 connection failed: ${resp[1]}`);
+    let addrLen = resp[3] === 1 ? 4 : resp[3] === 4 ? 16 : resp[3] === 3 ? 1 + (await read(1))[0] : 0;
+    if (addrLen > 0) await read(addrLen + 2);
+    writer.releaseLock();
+    reader.releaseLock();
+    return socket;
+  } catch (err) {
+    writer.releaseLock().catch(() => {
+    });
+    reader.releaseLock().catch(() => {
+    });
+    socket.close().catch(() => {
+    });
+    throw err;
+  }
+}
+
+// src/connector/http.js
+async function httpConnect(socket, target, credentials, isTLS = false) {
+  const writer = socket.writable.getWriter();
+  const reader = socket.readable.getReader();
+  if (isTLS && socket.opened) await socket.opened;
+  try {
+    const { username, password } = credentials || {};
+    const auth = username && password ? `Proxy-Authorization: Basic ${btoa(`${username}:${password}`)}\r
+` : "";
+    const request = `CONNECT ${target.hostname}:${target.port} HTTP/1.1\r
+Host: ${target.hostname}:${target.port}\r
+${auth}User-Agent: Mozilla/5.0\r
+Connection: keep-alive\r
+\r
+`;
+    await writer.write(new TextEncoder().encode(request));
+    writer.releaseLock();
+    const header = new Uint8Array(8192);
+    let length = 0, matched = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || !value) throw new Error("HTTP proxy closed connection");
+      for (let i = 0; i < value.byteLength; i++) {
+        if (length >= 8192) throw new Error("HTTP CONNECT response too large");
+        header[length++] = value[i];
+        const expected = [13, 10, 13, 10][matched];
+        if (value[i] === expected) matched++;
+        else matched = value[i] === 13 ? 1 : 0;
+        if (matched === 4) {
+          const status = new TextDecoder().decode(header.slice(0, length)).match(/HTTP\/\d\.\d\s+(\d{3})/);
+          if (!status || Number(status[1]) >= 300) throw new Error(`HTTP CONNECT failed: ${status ? status[1] : "unknown"}`);
+          reader.releaseLock();
+          return socket;
+        }
+      }
+    }
+  } catch (err) {
+    writer.releaseLock().catch(() => {
+    });
+    reader.releaseLock().catch(() => {
+    });
+    socket.close().catch(() => {
+    });
+    throw err;
+  }
+}
+
 // src/dns/service.js
+var DNS_TYPE_MAP = { A: 1, AAAA: 28, TXT: 16 };
+async function resolveDnsOverHttps(name, type, doh = "https://cloudflare-dns.com/dns-query") {
+  const qtype = DNS_TYPE_MAP[String(type).toUpperCase()] || 1;
+  const qname = encodeDNSName(String(name).trim().toLowerCase().replace(/\.$/, ""));
+  const query = new Uint8Array(12 + qname.length + 4);
+  const view = new DataView(query.buffer);
+  view.setUint16(0, crypto.getRandomValues(new Uint16Array(1))[0]);
+  view.setUint16(2, 256);
+  view.setUint16(4, 1);
+  query.set(qname, 12);
+  view.setUint16(12 + qname.length, qtype);
+  view.setUint16(12 + qname.length + 2, 1);
+  const res = await fetch(doh, {
+    method: "POST",
+    headers: { "Content-Type": "application/dns-message", Accept: "application/dns-message" },
+    body: query
+  });
+  if (!res.ok) return [];
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const dv = new DataView(buf.buffer);
+  const ancount = dv.getUint16(6);
+  if (ancount === 0) return [];
+  let offset = 12;
+  for (let i = 0; i < dv.getUint16(4); i++) {
+    const [, end] = parseDNSName(buf, offset);
+    offset = end + 4;
+  }
+  const results = [];
+  for (let i = 0; i < ancount && offset < buf.length; i++) {
+    const [, nameEnd] = parseDNSName(buf, offset);
+    offset = nameEnd;
+    const rtype = dv.getUint16(offset);
+    offset += 2;
+    offset += 2;
+    offset += 4;
+    const rdlen = dv.getUint16(offset);
+    offset += 2;
+    const rdata = buf.slice(offset, offset + rdlen);
+    offset += rdlen;
+    if (rtype === 1 && rdlen === 4) {
+      results.push(`${rdata[0]}.${rdata[1]}.${rdata[2]}.${rdata[3]}`);
+    } else if (rtype === 28 && rdlen === 16) {
+      const segs = [];
+      for (let j = 0; j < 16; j += 2) segs.push((rdata[j] << 8 | rdata[j + 1]).toString(16));
+      results.push(segs.join(":"));
+    } else if (rtype === 16) {
+      let t = 0;
+      const parts = [];
+      while (t < rdlen) {
+        const len = rdata[t++];
+        parts.push(new TextDecoder().decode(rdata.slice(t, t + len)));
+        t += len;
+      }
+      results.push(parts.join(""));
+    }
+  }
+  return results;
+}
+function encodeDNSName(name) {
+  const parts = name.split(".");
+  const bufs = parts.map((p) => {
+    const e = new TextEncoder().encode(p);
+    return new Uint8Array([e.length, ...e]);
+  });
+  const total = bufs.reduce((s, b) => s + b.length, 0) + 1;
+  const result = new Uint8Array(total);
+  let off = 0;
+  for (const b of bufs) {
+    result.set(b, off);
+    off += b.length;
+  }
+  result[off] = 0;
+  return result;
+}
+function parseDNSName(buf, pos) {
+  const labels = [];
+  let p = pos, jumped = false, endPos = -1;
+  while (p < buf.length) {
+    const len = buf[p];
+    if (len === 0) {
+      if (!jumped) endPos = p + 1;
+      break;
+    }
+    if ((len & 192) === 192) {
+      if (!jumped) endPos = p + 2;
+      p = (len & 63) << 8 | buf[p + 1];
+      jumped = true;
+      continue;
+    }
+    labels.push(new TextDecoder().decode(buf.slice(p + 1, p + 1 + len)));
+    p += len + 1;
+  }
+  return [labels.join("."), endPos];
+}
 async function resolveDnsOverTcp({ payload, connector, hostname = "8.8.4.4", port = 53 }) {
   const query = toBytes(payload);
   if (query.byteLength === 0 || query.byteLength > 65535) {
@@ -1176,6 +1743,119 @@ function toBytes(value) {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   return new Uint8Array();
+}
+
+// src/connector/proxyip.js
+var DEFAULT_DOH = "https://cloudflare-dns.com/dns-query";
+async function resolveProxyIP(proxyIP, options = {}) {
+  const input = String(proxyIP || "").trim().toLowerCase();
+  if (!input) return [];
+  const doh = options.doh || DEFAULT_DOH;
+  let address, port = 443;
+  const portMatch = input.match(/^(.+?):(\d+)$/);
+  if (portMatch) {
+    address = portMatch[1];
+    port = parseInt(portMatch[2], 10);
+  } else {
+    address = input;
+  }
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address)) {
+    return [{ hostname: address, port }];
+  }
+  const results = [];
+  const txtRecords = await resolveDnsOverHttps(address, "TXT", doh);
+  for (const record of txtRecords) {
+    const parts = String(record).replace(/^"|"$/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+    for (const part of parts) {
+      const p = part.match(/^(.+?):(\d+)$/);
+      if (p) results.push({ hostname: p[1], port: parseInt(p[2], 10) });
+      else results.push({ hostname: part, port });
+    }
+  }
+  if (results.length > 0) return results;
+  const aRecords = await resolveDnsOverHttps(address, "A", doh);
+  for (const ip of aRecords) {
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(String(ip))) {
+      results.push({ hostname: String(ip), port });
+    }
+  }
+  if (results.length > 0) return results;
+  const aaaaRecords = await resolveDnsOverHttps(address, "AAAA", doh);
+  for (const ip of aaaaRecords) {
+    if (String(ip).includes(":")) {
+      results.push({ hostname: `[${ip}]`, port });
+    }
+  }
+  return results;
+}
+async function proxyIPConnect(tcpConnect, target, proxyIP, options = {}) {
+  const candidates = await resolveProxyIP(proxyIP, options);
+  if (candidates.length === 0) throw new Error("No proxy IP candidates");
+  const shuffled = [...candidates].sort(() => Math.random() - 0.5).slice(0, 8);
+  const errors = [];
+  for (const candidate of shuffled) {
+    try {
+      const socket = tcpConnect({ hostname: candidate.hostname, port: candidate.port });
+      if (socket.opened) await socket.opened;
+      return socket;
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  throw new Error(`All proxy IPs failed: ${errors.map((e) => e.message).join(", ")}`);
+}
+
+// src/connector/chain.js
+function createFallbackConnector(directConnect, proxyConfig) {
+  const mode = proxyConfig?.\u6A21\u5F0F;
+  return async function connect2(target) {
+    if (mode === "auto") {
+      if (isCloudflareIP(target.hostname)) return proxyConnect(directConnect, target, proxyConfig);
+      const socket = directConnect(target);
+      if (socket.opened) await socket.opened;
+      return socket;
+    }
+    if (mode === "socks5" && proxyConfig?.SOCKS5?.\u5168\u5C40) {
+      return proxyConnect(directConnect, target, proxyConfig);
+    }
+    try {
+      const socket = directConnect(target);
+      if (socket.opened) {
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("DIRECT_TIMEOUT")), 5e3));
+        await Promise.race([socket.opened, timeout]);
+      }
+      return socket;
+    } catch {
+      return proxyConnect(directConnect, target, proxyConfig);
+    }
+  };
+}
+async function proxyConnect(directConnect, target, proxyConfig) {
+  const errors = [];
+  const socksConfig = proxyConfig?.SOCKS5;
+  if (socksConfig?.\u542F\u7528) {
+    try {
+      const addr = typeof socksConfig.\u8D26\u53F7 === "object" ? socksConfig.\u8D26\u53F7 : {};
+      const socket = directConnect({ hostname: addr.hostname || "127.0.0.1", port: addr.port || 1080 });
+      if (socket.opened) await socket.opened;
+      const type = socksConfig.\u542F\u7528;
+      if (type === "socks5") await socks5Connect(socket, target, addr);
+      else if (type === "http") await httpConnect(socket, target, addr, false);
+      else if (type === "https") await httpConnect(socket, target, addr, true);
+      return socket;
+    } catch (err) {
+      errors.push(`${socksConfig.\u542F\u7528}: ${err.message}`);
+    }
+  }
+  const proxyIP = proxyConfig?.PROXYIP;
+  if (proxyIP && proxyIP !== "none") {
+    try {
+      return await proxyIPConnect(directConnect, target, proxyIP);
+    } catch (err) {
+      errors.push(`proxyip: ${err.message}`);
+    }
+  }
+  throw new Error(`Proxy failed: ${errors.join("; ")}`);
 }
 
 // src/protocol-v2/address.js
@@ -1546,7 +2226,8 @@ function openGrpcTransport(request, limits) {
       });
     },
     response: new Response(responseStream.readable, {
-      headers: { "content-type": "application/grpc", "grpc-encoding": "identity", "cache-control": "no-store" }
+      status: 200,
+      headers: { "content-type": "application/grpc", "grpc-encoding": "identity", "grpc-status": "0", "cache-control": "no-store" }
     }),
     metadata: Object.freeze({ name: "grpc" })
   };
@@ -1655,9 +2336,11 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
 }
 function readEarlyData(header) {
   const protocol = String(header || "").split(",")[0].trim();
-  if (!protocol || !/^[A-Za-z0-9_-]+$/.test(protocol)) return { protocol: "", bytes: new Uint8Array() };
+  if (!protocol.startsWith("ed.")) return { protocol: "", bytes: new Uint8Array() };
+  const payload = protocol.slice(3);
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) return { protocol: "", bytes: new Uint8Array() };
   try {
-    const normalized = protocol.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(protocol.length / 4) * 4, "=");
+    const normalized = payload.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
     return { protocol, bytes: Uint8Array.from(atob(normalized), (char) => char.charCodeAt(0)) };
   } catch {
     return { protocol: "", bytes: new Uint8Array() };
@@ -1677,6 +2360,9 @@ function openXhttpTransport(request) {
     throw new AppError("INVALID_XHTTP_REQUEST", 400);
   }
   if (!request.body) throw new AppError("XHTTP_BODY_REQUIRED", 400);
+  if (type.startsWith("application/x-http") && request.headers.get("x-http-mode") && request.headers.get("x-http-mode") !== "stream-one") {
+    throw new AppError("XHTTP_MODE_UNSUPPORTED", 400);
+  }
   const responseStream = new TransformStream();
   const writer = responseStream.writable.getWriter();
   let closed = false;
@@ -1838,7 +2524,10 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
 }
 async function forwardTcp({ reader, transport, connector, request, meter }) {
   const socket = connector.connect({ hostname: request.hostname, port: request.port });
-  if (socket.opened) await socket.opened;
+  if (socket.opened) {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError("TCP_CONNECT_TIMEOUT", 408)), 5e3));
+    await Promise.race([socket.opened, timeout]);
+  }
   const remoteWriter = socket.writable.getWriter();
   const remoteReader = socket.readable.getReader();
   const upload = (async () => {
@@ -1933,21 +2622,25 @@ var index_default = {
     if (!env?.DB) return jsonResponse({ ok: false, error: "DB_BINDING_REQUIRED" }, 500);
     try {
       const users = createUserRepository(env);
-      await bootstrapAdmin(env, users);
       const route = classifyRequest(request);
       if (route.kind === "api") {
+        await bootstrapAdmin(env, users);
         const sessions = createSessionService(env, users);
         return createApiRouter({ users, sessions })(request, env);
       }
       if (route.kind === "data-flow") {
         const dependencies = createAdmissionDependencies(env);
         const session = await createAdmissionService(dependencies).admit(route.dataFlow);
+        const directConnect = createDirectConnector(request.fetcher?.connect?.bind(request.fetcher));
+        const config = normalizeGlobalConfig(await getGlobalConfig(env));
+        const connector = config.\u53CD\u4EE3?.\u6A21\u5F0F ? createFallbackConnector(directConnect, config.\u53CD\u4EE3) : directConnect;
         return startDataFlowPipeline({
           request,
           session,
-          connector: createDirectConnector(request.fetcher?.connect?.bind(request.fetcher)),
+          connector,
           usageRepository: createUsageRepository(env),
-          ctx
+          ctx,
+          runtime: config
         });
       }
       if (route.kind === "version") {

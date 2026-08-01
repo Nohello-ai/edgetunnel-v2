@@ -1,3 +1,5 @@
+import { AppError } from '../core/errors.js';
+
 const encoder = new TextEncoder();
 const ITERATIONS = 210000;
 
@@ -25,7 +27,7 @@ export async function verifyPassword(password, encoded) {
 
 export function validatePassword(password) {
   const value = String(password || '');
-  if (value.length < 10 || value.length > 256) throw new TypeError('PASSWORD_LENGTH_INVALID');
+  if (value.length < 10 || value.length > 256) throw new AppError('PASSWORD_LENGTH_INVALID', 400, '密码长度必须为 10-256 个字符');
 }
 
 async function derive(password, salt, iterations, length = 32) {

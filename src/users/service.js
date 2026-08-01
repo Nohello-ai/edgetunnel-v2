@@ -15,7 +15,13 @@ export function createUserService(repository) {
         quotaBytes: validQuota(input.quotaBytes), trojanSecret: randomToken(32), settings: input.settings || {},
         createdAt: now, updatedAt: now,
       };
-      await repository.create(user);
+      if (await repository.getByUsername(username)) throw new AppError('USERNAME_TAKEN', 409, '用户名已存在');
+      try {
+        await repository.create(user);
+      } catch (error) {
+        if (/UNIQUE|constraint/i.test(String(error?.message))) throw new AppError('USERNAME_TAKEN', 409, '用户名已存在');
+        throw error;
+      }
       return publicUser(user);
     },
     async update(userID, fields, actor) {

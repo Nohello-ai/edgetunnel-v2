@@ -22,10 +22,11 @@ export default {
 
     try {
       const users = createUserRepository(env);
-      await bootstrapAdmin(env, users);
       const route = classifyRequest(request);
 
       if (route.kind === 'api') {
+        // 仅控制面需要引导管理员，数据面热路径不做这次 D1 查询
+        await bootstrapAdmin(env, users);
         const sessions = createSessionService(env, users);
         return createApiRouter({ users, sessions })(request, env);
       }
@@ -44,6 +45,7 @@ export default {
           connector,
           usageRepository: createUsageRepository(env),
           ctx,
+          runtime: config,
         });
       }
 

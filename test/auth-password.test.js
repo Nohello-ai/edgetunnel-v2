@@ -13,5 +13,5 @@ test('password hash is salted, versioned, and verifies correctly', async () => {
 });
 
 test('password policy rejects short values', async () => {
-  await assert.rejects(hashPassword('short'), /PASSWORD_LENGTH_INVALID/);
+  await assert.rejects(hashPassword('short'), { code: 'PASSWORD_LENGTH_INVALID' });
 });

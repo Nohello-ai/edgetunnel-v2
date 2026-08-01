@@ -42,7 +42,7 @@ export function createApiRouter({ users, sessions }) {
       if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError('NOT_FOUND', 404);
-    } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status); }
+    } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message, ...(appError.details ? { details: appError.details } : {}) }, appError.status); }
   };
 }
 

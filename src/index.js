@@ -4,6 +4,9 @@ import { createApiRouter } from './api-v2/router.js';
 import { bootstrapAdmin } from './auth/bootstrap.js';
 import { createSessionService } from './auth/session.js';
 import { createDirectConnector } from './connector/direct.js';
+import { createFallbackConnector } from './connector/chain.js';
+import { getGlobalConfig } from './config/loader.js';
+import { normalizeGlobalConfig } from './config/schema.js';
 import { asAppError } from './core/errors.js';
 import { startDataFlowPipeline } from './proxy/pipeline.js';
 import { classifyRequest } from './routes/router.js';
@@ -30,10 +33,15 @@ export default {
       if (route.kind === 'data-flow') {
         const dependencies = createAdmissionDependencies(env);
         const session = await createAdmissionService(dependencies).admit(route.dataFlow);
+        const directConnect = createDirectConnector(request.fetcher?.connect?.bind(request.fetcher));
+        const config = normalizeGlobalConfig(await getGlobalConfig(env));
+        const connector = config.反代?.PROXYIP || config.反代?.SOCKS5?.启用
+          ? createFallbackConnector(directConnect, config.反代)
+          : directConnect;
         return startDataFlowPipeline({
           request,
           session,
-          connector: createDirectConnector(request.fetcher?.connect?.bind(request.fetcher)),
+          connector,
           usageRepository: createUsageRepository(env),
           ctx,
         });

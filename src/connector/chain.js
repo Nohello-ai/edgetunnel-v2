@@ -3,7 +3,7 @@
  *
  * 按反代模式选择连接策略。
  *  - proxyip：直连 → ProxyIP 降级
- *  - socks5：直连 → SOCKS5/HTTP/HTTPS 降级
+ *  - socks5：全局模式走代理，否则直连 → 代理降级
  *  - auto：自动检测，目标为 Cloudflare 则走反代，否则直连
  */
 import { socks5Connect } from './socks5.js';
@@ -24,18 +24,18 @@ export function createFallbackConnector(directConnect, proxyConfig) {
   return async function connect(target) {
     // auto 模式：检测目标是否在 Cloudflare 上
     if (mode === 'auto') {
-      const isCF = isCloudflareIP(target.hostname);
-      if (isCF) {
-        // 同源，走反代跳板
-        return proxyConnect(directConnect, target, proxyConfig);
-      }
-      // 非同源，直连
+      if (isCloudflareIP(target.hostname)) return proxyConnect(directConnect, target, proxyConfig);
       const socket = directConnect(target);
       if (socket.opened) await socket.opened;
       return socket;
     }
 
-    // proxyip 或 socks5 模式：先直连，失败走反代
+    // socks5 全局模式：不走直连，直接走代理
+    if (mode === 'socks5' && proxyConfig?.SOCKS5?.全局) {
+      return proxyConnect(directConnect, target, proxyConfig);
+    }
+
+    // 其他模式：先直连，失败走反代
     try {
       const socket = directConnect(target);
       if (socket.opened) {

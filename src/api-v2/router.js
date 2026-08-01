@@ -39,7 +39,7 @@ export function createApiRouter({ users, sessions }) {
       if (banMatch && request.method === 'POST') { requireAdmin(current); validateBanTarget(await users.getByID(banMatch[1])); return jsonResponse({ ok: true, ban: await governance(env).ban(banMatch[1], await readBody(request)) }); }
       if (banMatch && request.method === 'DELETE') { requireAdmin(current); await governance(env).unban(banMatch[1]); return jsonResponse({ ok: true }); }
       if (url.pathname === '/api/admin/config' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
-      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const config = normalizeGlobalConfig(await readBody(request), await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
+      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); validateProxyConfig(body); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError('NOT_FOUND', 404);
     } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status); }
@@ -151,4 +151,12 @@ function loginFingerprint(request, username) {
   const address = request.headers.get('cf-connecting-ip') || 'unknown';
   const normalized = String(username || '').trim().toLowerCase();
   return `${address}:${normalized}`;
+}
+
+function validateProxyConfig(config) {
+  const proxy = config?.反代;
+  if (!proxy?.模式) return;
+  if (proxy.模式 === 'socks5' && proxy.SOCKS5?.全局) {
+    if (!proxy.SOCKS5?.账号) throw new AppError('PROXY_CONFIG_INVALID', 400, '全局代理模式必须填写代理账号');
+  }
 }

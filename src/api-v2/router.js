@@ -28,8 +28,17 @@ export function createApiRouter({ users, sessions }) {
         const result = await auth.login(body.username, body.password, loginFingerprint(request, body.username));
         return jsonResponse({ ok: true, user: publicUser(result.user) }, 200, { 'set-cookie': result.session.cookie });
       }
+      if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+        const body = await readBody(request);
+        const user = await userService.create({ ...body, role: 'user' });
+        return jsonResponse({ ok: true, user: publicUser(user) }, 201);
+      }
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') return jsonResponse({ ok: true }, 200, { 'set-cookie': await auth.logout(request) });
-      if (url.pathname === '/api/auth/me' && request.method === 'GET') return jsonResponse({ ok: true, user: publicUser(requireUser(current)) });
+      if (url.pathname === '/api/auth/me' && request.method === 'GET') {
+        const u = requireUser(current);
+        const usage = await env.DB?.prepare('SELECT upload,download,total FROM usage WHERE user_id = ?').bind(u.userID).first();
+        return jsonResponse({ ok: true, user: { ...publicUser(u), usage: usage ? { upload: Number(usage.upload), download: Number(usage.download), total: Number(usage.total) } : { upload: 0, download: 0, total: 0 } } });
+      }
       if (url.pathname === '/api/admin/users' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, users: await userService.list() }); }
       if (url.pathname === '/api/admin/users' && request.method === 'POST') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201); }
       const match = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i);

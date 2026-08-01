@@ -13,7 +13,7 @@ import { createGovernanceService, validateBanTarget } from '../users/governance.
 import { jsonResponse, textResponse } from '../utils/http.js';
 import { identifyOperator } from '../net/operator.js';
 import { getCIDRList } from '../net/cidr.js';
-import { generateIPs, parseCustomIPs, fetchCustomIPs, generateNodeName } from '../net/ip-pool.js';
+import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName } from '../net/ip-pool.js';
 
 export function createApiRouter({ users, sessions }) {
   const userService = createUserService(users);
@@ -85,24 +85,19 @@ async function resolveIPReplacements(optIP, request) {
   const randomPort = optIP.随机端口;
 
   if (optIP.模式 === 'custom') {
-    const source = optIP.自定义IP源;
-    if (!source) return null;
-
-    // URL 模式
-    if (/^https?:\/\//i.test(source)) {
-      const entries = await fetchCustomIPs(source, { defaultPort: randomPort ? undefined : 443 });
-      if (!entries) return null;
-      return entries.map((entry, i) => ({
-        ...entry,
-        name: generateNodeName(entry.name, operator, i + 1),
-      }));
+    // 优选网站URL 优先，其次 自定义IP源
+    let entries;
+    if (optIP.优选网站URL) {
+      entries = await fetchCustomIPs(optIP.优选网站URL);
+    } else if (optIP.自定义IP源) {
+      entries = /^https?:\/\//i.test(optIP.自定义IP源)
+        ? await fetchCustomIPs(optIP.自定义IP源)
+        : parseCustomIPs(optIP.自定义IP源);
     }
-
-    // 文本模式（多行 IP 列表）
-    const entries = parseCustomIPs(source, { defaultPort: randomPort ? undefined : 443 });
     if (!entries) return null;
     return entries.map((entry, i) => ({
-      ...entry,
+      address: entry.address,
+      port: entry.port ?? pickPort(randomPort),
       name: generateNodeName(entry.name, operator, i + 1),
     }));
   }

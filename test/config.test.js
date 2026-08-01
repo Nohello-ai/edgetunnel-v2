@@ -15,25 +15,27 @@ test('config defaults optimized IP to disabled', () => {
   assert.equal(config.节点参数.优选IP.模式, '');
   assert.equal(config.节点参数.优选IP.随机端口, true);
   assert.equal(config.节点参数.优选IP.自定义IP源, '');
+  assert.equal(config.节点参数.优选IP.优选网站URL, '');
 });
 
 test('config accepts optimized IP settings', () => {
   const config = normalizeGlobalConfig({
     节点参数: {
-      优选IP: { 模式: 'custom', 随机端口: false, 自定义IP源: '104.16.0.1:2053#测试' },
+      优选IP: { 模式: 'custom', 随机端口: false, 优选网站URL: 'https://example.com/ips.txt' },
     },
   });
   assert.equal(config.节点参数.优选IP.模式, 'custom');
   assert.equal(config.节点参数.优选IP.随机端口, false);
-  assert.equal(config.节点参数.优选IP.自定义IP源, '104.16.0.1:2053#测试');
+  assert.equal(config.节点参数.优选IP.优选网站URL, 'https://example.com/ips.txt');
 });
 
-test('config strips custom IP source when not in custom mode', () => {
+test('config strips custom fields when not in custom mode', () => {
   const config = normalizeGlobalConfig({
     节点参数: {
-      优选IP: { 模式: 'optimized', 自定义IP源: '104.16.0.1' },
+      优选IP: { 模式: 'optimized', 自定义IP源: '104.16.0.1', 优选网站URL: 'https://example.com/ips.txt' },
     },
   });
   assert.equal(config.节点参数.优选IP.模式, 'optimized');
   assert.equal(config.节点参数.优选IP.自定义IP源, '');
+  assert.equal(config.节点参数.优选IP.优选网站URL, '');
 });

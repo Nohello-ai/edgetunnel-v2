@@ -110,6 +110,7 @@ function normalizeOptimizedIP(value) {
     模式: mode,
     随机端口: Boolean(config.随机端口 ?? true),
     自定义IP源: mode === 'custom' ? String(config.自定义IP源 || '').trim() : '',
+    优选网站URL: mode === 'custom' ? String(config.优选网站URL || '').trim() : '',
   };
 }
 

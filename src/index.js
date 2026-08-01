@@ -35,7 +35,7 @@ export default {
         const session = await createAdmissionService(dependencies).admit(route.dataFlow);
         const directConnect = createDirectConnector(request.fetcher?.connect?.bind(request.fetcher));
         const config = normalizeGlobalConfig(await getGlobalConfig(env));
-        const connector = config.反代?.PROXYIP || config.反代?.SOCKS5?.启用
+        const connector = config.反代?.模式
           ? createFallbackConnector(directConnect, config.反代)
           : directConnect;
         return startDataFlowPipeline({

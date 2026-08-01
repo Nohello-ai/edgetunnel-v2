@@ -134,6 +134,35 @@ export function pickPort(useRandomPort) {
 }
 
 /**
+ * Cloudflare 官方 IP 段（兜底列表）。
+ * 用于判断目标是否在 Cloudflare 网络上。
+ */
+const CF_CIDRS = Object.freeze([
+  { base: ipToInt('104.16.0.0'), bits: 13 },
+  { base: ipToInt('172.64.0.0'), bits: 13 },
+  { base: ipToInt('162.158.0.0'), bits: 15 },
+  { base: ipToInt('198.41.128.0'), bits: 17 },
+  { base: ipToInt('188.114.96.0'), bits: 20 },
+  { base: ipToInt('173.245.48.0'), bits: 20 },
+]);
+
+/**
+ * 判断一个 IP 地址是否在 Cloudflare 网络内。
+ *
+ * @param {string} ip - IPv4 地址
+ * @returns {boolean}
+ */
+export function isCloudflareIP(ip) {
+  const target = ipToInt(ip);
+  if (target == null) return false;
+  for (const cidr of CF_CIDRS) {
+    const mask = ~((1 << (32 - cidr.bits)) - 1) >>> 0;
+    if ((target & mask) === (cidr.base & mask)) return true;
+  }
+  return false;
+}
+
+/**
  * 生成节点名称。
  * 无名称时自动生成 "🇨🇳 中国移动优选1" 格式。
  *

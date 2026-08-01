@@ -39,7 +39,7 @@ export function createApiRouter({ users, sessions }) {
       if (banMatch && request.method === 'POST') { requireAdmin(current); validateBanTarget(await users.getByID(banMatch[1])); return jsonResponse({ ok: true, ban: await governance(env).ban(banMatch[1], await readBody(request)) }); }
       if (banMatch && request.method === 'DELETE') { requireAdmin(current); await governance(env).unban(banMatch[1]); return jsonResponse({ ok: true }); }
       if (url.pathname === '/api/admin/config' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
-      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); validateProxyConfig(body); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
+      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError('NOT_FOUND', 404);
     } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status); }
@@ -153,10 +153,42 @@ function loginFingerprint(request, username) {
   return `${address}:${normalized}`;
 }
 
-function validateProxyConfig(config) {
-  const proxy = config?.反代;
+async function validateProxyConfig(body, request) {
+  const proxy = body?.反代;
   if (!proxy?.模式) return;
-  if (proxy.模式 === 'socks5' && proxy.SOCKS5?.全局) {
-    if (!proxy.SOCKS5?.账号) throw new AppError('PROXY_CONFIG_INVALID', 400, '全局代理模式必须填写代理账号');
+
+  const socks = proxy.SOCKS5;
+  if (proxy.模式 === 'socks5' && socks?.全局) {
+    if (!socks.账号) throw new AppError('PROXY_CONFIG_INVALID', 400, '全局代理模式必须填写代理账号');
+
+    // 尝试连接代理服务器验证可用性
+    const connect = request.fetcher?.connect?.bind(request.fetcher);
+    if (!connect) throw new AppError('PROXY_TEST_FAILED', 400, '无法获取网络连接');
+
+    const addr = typeof socks.账号 === 'object' ? socks.账号 : parseProxyAccount(socks.账号);
+    if (!addr?.hostname) throw new AppError('PROXY_CONFIG_INVALID', 400, '代理账号格式无效');
+
+    try {
+      const socket = connect({ hostname: addr.hostname, port: addr.port || 1080 });
+      if (socket.opened) {
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+        await Promise.race([socket.opened, timeout]);
+      }
+      socket.close().catch(() => {});
+    } catch (err) {
+      throw new AppError('PROXY_UNREACHABLE', 400, `代理服务器无法连接: ${err.message}`);
+    }
   }
+}
+
+function parseProxyAccount(value) {
+  const text = String(value || '').trim();
+  const atIndex = text.lastIndexOf('@');
+  if (atIndex !== -1) {
+    const hostPart = text.slice(atIndex + 1);
+    const [hostname, port] = hostPart.split(':');
+    return { hostname, port: port ? parseInt(port, 10) : 1080 };
+  }
+  const [hostname, port] = text.split(':');
+  return { hostname, port: port ? parseInt(port, 10) : 1080 };
 }

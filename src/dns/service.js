@@ -22,11 +22,16 @@ export async function resolveDnsOverHttps(name, type, doh = 'https://cloudflare-
     method: 'POST',
     headers: { 'Content-Type': 'application/dns-message', Accept: 'application/dns-message' },
     body: query,
+    signal: AbortSignal.timeout(5000),
   });
   if (!res.ok) return [];
 
   const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.byteLength < 12) return [];
   const dv = new DataView(buf.buffer);
+  const flags = dv.getUint16(2);
+  // 截断标志 (TC) 已设置，响应不完整
+  if (flags & 0x0200) return [];
   const ancount = dv.getUint16(6);
   if (ancount === 0) return [];
 
@@ -78,18 +83,23 @@ function encodeDNSName(name) {
 function parseDNSName(buf, pos) {
   const labels = [];
   let p = pos, jumped = false, endPos = -1;
-  while (p < buf.length) {
+  let jumps = 0;
+  while (p < buf.length && jumps < 10) {
     const len = buf[p];
     if (len === 0) { if (!jumped) endPos = p + 1; break; }
     if ((len & 0xc0) === 0xc0) {
+      if (p + 1 >= buf.length) return ['', pos + 2];
       if (!jumped) endPos = p + 2;
       p = ((len & 0x3f) << 8) | buf[p + 1];
       jumped = true;
+      jumps++;
       continue;
     }
+    if (p + 1 + len > buf.length) return ['', pos + 2];
     labels.push(new TextDecoder().decode(buf.slice(p + 1, p + 1 + len)));
     p += len + 1;
   }
+  if (endPos === -1) endPos = p + 1;
   return [labels.join('.'), endPos];
 }
 
@@ -100,6 +110,12 @@ export async function resolveDnsOverTcp({ payload, connector, hostname = '8.8.4.
   }
 
   const socket = connector.connect({ hostname, port });
+  if (socket.opened) {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new AppError('DNS_CONNECT_TIMEOUT', 504)), 5000); });
+    await Promise.race([socket.opened, timeout]);
+    clearTimeout(timer);
+  }
   const writer = socket.writable.getWriter();
   const reader = socket.readable.getReader();
   try {
@@ -107,7 +123,11 @@ export async function resolveDnsOverTcp({ payload, connector, hostname = '8.8.4.
     frame[0] = query.byteLength >>> 8;
     frame[1] = query.byteLength & 0xff;
     frame.set(query, 2);
-    await writer.write(frame);
+    let timer;
+    const writePromise = writer.write(frame);
+    const writeTimeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new AppError('DNS_WRITE_TIMEOUT', 504)), 5000); });
+    await Promise.race([writePromise, writeTimeout]);
+    clearTimeout(timer);
 
     const response = await readDnsFrame(reader);
     if (!response) throw new AppError('DNS_UPSTREAM_CLOSED', 502);
@@ -127,6 +147,7 @@ async function readDnsFrame(reader) {
     if (done) return null;
     buffer = concat(buffer, toBytes(value));
     if (expected < 0 && buffer.byteLength >= 2) expected = (buffer[0] << 8) | buffer[1];
+    if (expected > 65535) throw new AppError('DNS_FRAME_TOO_LARGE', 400);
     if (expected >= 0 && buffer.byteLength >= expected + 2) return buffer.slice(2, expected + 2);
   }
 }

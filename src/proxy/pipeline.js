@@ -8,9 +8,13 @@ import { createUsageMeter } from '../usage/meter.js';
 export function startDataFlowPipeline({ request, session, connector, usageRepository, ctx, runtime }) {
   const transport = openTransport(session.transport, request, undefined, runtime);
   const remaining = session.quotaBytes > 0 ? Math.max(0, session.quotaBytes - Number(session.usage.total || 0)) : 0;
+  if (session.quotaBytes > 0 && remaining <= 0) {
+    transport.close(new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403)).catch(() => {});
+    throw new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403);
+  }
   const meter = createUsageMeter({ userID: session.userID, repository: usageRepository, ctx, maxBytes: remaining });
   const task = runPipeline({ transport, session, connector, meter })
-    .catch(async (error) => { await transport.close(error); })
+    .catch(async (error) => { try { await transport.close(error); } catch {} })
     .finally(() => meter.flush());
   ctx?.waitUntil?.(task);
   return transport.response;
@@ -25,17 +29,23 @@ export async function runPipeline({ transport, session, connector, meter }) {
   let parsed;
 
   try {
+    const deadline = Date.now() + 10000;
     while (!parsed) {
+      if (Date.now() > deadline) throw new AppError('PROTOCOL_HEADER_TIMEOUT', 408);
       const { done, value } = await reader.read();
       if (done) throw new AppError('INCOMPLETE_PROTOCOL_HEADER', 400);
       meter.addUpload(value.byteLength);
       const result = parser.push(value);
       if (result.status === 'error') throw new AppError(result.code, 400);
-      if (result.status === 'ready') parsed = result.request;
+      if (result.status === 'ready') {
+        parsed = result.request;
+      }
+      if (result.status !== 'need-more' && result.status !== 'ready' && result.status !== 'error') {
+        throw new AppError('UNEXPECTED_PARSER_STATUS', 500);
+      }
     }
 
     if (parsed.isUDP) return forwardDnsDatagrams({ reader, transport, connector, request: parsed, protocol: session.protocol, meter });
-
     await forwardTcp({ reader, transport, connector, request: parsed, meter });
   } finally {
     try { reader.releaseLock(); } catch {}
@@ -44,12 +54,14 @@ export async function runPipeline({ transport, session, connector, meter }) {
 
 async function forwardDnsDatagrams({ reader, transport, connector, request, protocol, meter }) {
   const codec = createDatagramCodec(protocol, request);
-  let responseHeaderPending = request.responseHeader;
+  let responseHeaderPending = request.responseHeader || new Uint8Array();
   let chunk = request.payload;
   while (true) {
     for (const datagram of codec.push(chunk)) {
       if (datagram.port !== 53) throw new AppError('UDP_UNSUPPORTED', 400);
-      const payload = await resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+      const dnsPromise = resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError('DNS_TIMEOUT', 504)), 5000));
+      const payload = await Promise.race([dnsPromise, timeout]);
       const response = codec.encode({ ...datagram, payload });
       if (responseHeaderPending.byteLength) {
         await transport.write(responseHeaderPending);
@@ -65,13 +77,12 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
     meter.addUpload(chunk.byteLength);
   }
   codec.finish();
-  await transport.close();
+  try { await transport.close(); } catch {}
 }
 
 async function forwardTcp({ reader, transport, connector, request, meter }) {
   const socket = connector.connect({ hostname: request.hostname, port: request.port });
 
-  // 建连超时 5 秒
   if (socket.opened) {
     let timer;
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new AppError('TCP_CONNECT_TIMEOUT', 408)), 5000); });
@@ -99,7 +110,7 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
 
   const download = (async () => {
     try {
-      if (request.responseHeader.byteLength) {
+      if (request.responseHeader?.byteLength) {
         await transport.write(request.responseHeader);
         meter.addDownload(request.responseHeader.byteLength);
       }
@@ -112,8 +123,6 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
     } catch (error) {
       await reader.cancel(error).catch(() => {});
       throw error;
-    } finally {
-      await reader.cancel('remote closed').catch(() => {});
     }
   })();
 
@@ -121,7 +130,7 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
     const results = await Promise.allSettled([upload, download]);
     const failure = results.find((result) => result.status === 'rejected');
     if (failure) throw failure.reason;
-    await transport.close();
+    try { await transport.close(); } catch {}
   } finally {
     try { remoteWriter.releaseLock(); } catch {}
     try { remoteReader.releaseLock(); } catch {}

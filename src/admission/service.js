@@ -8,8 +8,12 @@ const TRANSPORT_PATHS = Object.freeze({
   xhttp: 'xhttp',
 });
 
+const TRANSPORT_ALIASES = Object.freeze({ ws: 'websocket', grpc: 'grpc', xhttp: 'xhttp' });
+const ALLOWED_TRANSPORTS = Object.freeze(['websocket', 'grpc', 'xhttp']);
+
 export function parseDataFlowRoute(url) {
   const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length < 3) return null;
   const transport = TRANSPORT_PATHS[segments[0]];
   const userID = segments[1] || url.searchParams.get('uid') || '';
   const protocol = segments[2] || url.searchParams.get('protocol') || '';
@@ -63,7 +67,9 @@ function resolveQuota(user, config) {
 }
 
 function resolveProtocol(route, config) {
-  const enabled = Array.isArray(config.protocols) ? config.protocols : [config.protocol || 'vless'];
+  let enabled = config.protocols;
+  if (typeof enabled === 'string') enabled = enabled.split(',').map((s) => s.trim());
+  if (!Array.isArray(enabled)) enabled = [config.protocol || 'vless'];
   if (!enabled.includes(route.protocol)) {
     throw new AppError('PROTOCOL_DISABLED', 403);
   }
@@ -74,5 +80,7 @@ function resolveTransports(config) {
   const configured = Array.isArray(config.transports)
     ? config.transports
     : [config.transport || 'websocket'];
-  return configured.filter((value) => ['websocket', 'grpc', 'xhttp'].includes(value));
+  return configured
+    .map((value) => TRANSPORT_ALIASES[value] || value)
+    .filter((value) => ALLOWED_TRANSPORTS.includes(value));
 }

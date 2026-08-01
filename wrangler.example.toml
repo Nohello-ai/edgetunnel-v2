@@ -7,6 +7,10 @@ binding = "DB"
 database_name = "replace-with-your-database-name"
 database_id = "replace-with-your-database-id"
 
+[[kv_namespaces]]
+binding = "KV"
+id = "replace-with-your-kv-id"
+
 # Set bootstrap credentials as encrypted secrets for the first request, then remove them:
 # wrangler secret put BOOTSTRAP_ADMIN_USER
 # wrangler secret put BOOTSTRAP_ADMIN_PASSWORD

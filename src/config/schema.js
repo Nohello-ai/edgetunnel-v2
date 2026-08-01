@@ -151,6 +151,14 @@ function normalizeSubConverter(value) {
   const config = normalizeObject(value);
   return {
     SUBAPI: String(config.SUBAPI || config.subapi || '').trim() || 'https://SUBAPI.cmliussss.net',
+    emoji: Boolean(config.emoji ?? true),
+    list: Boolean(config.list ?? false),
+    udp: Boolean(config.udp ?? true),
+    xudp: Boolean(config.xudp ?? false),
+    tls13: Boolean(config.tls13 ?? true),
+    append_type: Boolean(config.append_type ?? false),
+    sort: Boolean(config.sort ?? false),
+    config: String(config.config || ''),
   };
 }
 

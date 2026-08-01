@@ -108,21 +108,24 @@ export async function putUsage(env, userID, usage) {
 }
 
 export async function getGlobalConfig(env) {
-  const row = await env.DB.prepare('SELECT value FROM global_config WHERE key = ?')
-    .bind('global')
-    .first();
+  if (!env.KV) return {};
 
-  return parseJson(row?.value, {});
+  try {
+    const value = await env.KV.get('global_config', 'text');
+    return parseJson(value, {});
+  } catch {
+    return {};
+  }
 }
 
 export async function putGlobalConfig(env, config) {
-  await env.DB.prepare(`
-    INSERT INTO global_config (key, value, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET
-      value = excluded.value,
-      updated_at = excluded.updated_at
-  `).bind('global', JSON.stringify(config), new Date().toISOString()).run();
+  if (!env.KV) return config;
+
+  try {
+    await env.KV.put('global_config', JSON.stringify(config));
+  } catch {
+    // KV 写入失败，静默处理
+  }
 
   return config;
 }

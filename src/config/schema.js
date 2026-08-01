@@ -104,10 +104,12 @@ function normalizeNodeGroup(value) {
 
 function normalizeOptimizedIP(value) {
   const config = normalizeObject(value);
+  const MODES = new Set(['', 'optimized', 'random', 'custom']);
+  const mode = normalizeEnum(config.模式, MODES, '');
   return {
-    启用: Boolean(config.启用 ?? false),
+    模式: mode,
     随机端口: Boolean(config.随机端口 ?? true),
-    自定义IP源: String(config.自定义IP源 || '').trim(),
+    自定义IP源: mode === 'custom' ? String(config.自定义IP源 || '').trim() : '',
   };
 }
 

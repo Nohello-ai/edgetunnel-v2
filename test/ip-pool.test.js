@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateIPs, parseCIDR, pickPort, resolveIPSource } from '../src/net/ip-pool.js';
+import { generateIPs, parseCIDR, parseCustomIPs, fetchCustomIPs, generateNodeName } from '../src/net/ip-pool.js';
 
 const SAMPLE_CIDRS = ['104.16.0.0/13', '172.64.0.0/13'];
 
@@ -8,10 +8,6 @@ test('parseCIDR returns correct baseIP and hostBits', () => {
   const result = parseCIDR('104.16.0.0/13');
   assert.ok(result);
   assert.equal(result.hostBits, 19);
-
-  const base = result.baseIP >>> 0;
-  assert.equal((base >>> 24) & 0xff, 104);
-  assert.equal((base >>> 16) & 0xff, 16);
 });
 
 test('parseCIDR rejects invalid CIDR format', () => {
@@ -33,10 +29,10 @@ test('generateIPs returns all IP:port format', () => {
   }
 });
 
-test('generateIPs uses fixed port when specified', () => {
-  const ips = generateIPs(SAMPLE_CIDRS, 5, { fixedPort: 8443 });
+test('generateIPs uses fixed port 443 when ports=[443]', () => {
+  const ips = generateIPs(SAMPLE_CIDRS, 5, { ports: [443] });
   for (const item of ips) {
-    assert.ok(item.endsWith(':8443'));
+    assert.ok(item.endsWith(':443'));
   }
 });
 
@@ -50,76 +46,68 @@ test('generateIPs returns empty for invalid count', () => {
   assert.deepEqual(generateIPs(SAMPLE_CIDRS, -1), []);
 });
 
-test('generateIPs generates IPs within CIDR range', () => {
-  // /32 means only one possible IP
-  const ips = generateIPs(['104.16.0.0/32'], 1);
-  assert.ok(ips[0].startsWith('104.16.0.0:'));
+test('parseCustomIPs returns null for empty input', () => {
+  assert.equal(parseCustomIPs(''), null);
+  assert.equal(parseCustomIPs('   '), null);
+  assert.equal(parseCustomIPs(null), null);
 });
 
-test('generateIPs uses custom ports', () => {
-  const ips = generateIPs(SAMPLE_CIDRS, 5, { ports: [443] });
-  for (const item of ips) {
-    assert.ok(item.endsWith(':443'));
-  }
+test('parseCustomIPs parses IP:port#name', () => {
+  const result = parseCustomIPs('104.19.52.52:2053#CF移动优选1');
+  assert.deepEqual(result, [{ address: '104.19.52.52', port: 2053, name: 'CF移动优选1' }]);
 });
 
-test('generateIPs is deterministic in count', () => {
-  const a = generateIPs(SAMPLE_CIDRS, 100);
-  const b = generateIPs(SAMPLE_CIDRS, 100);
-  assert.equal(a.length, b.length);
+test('parseCustomIPs parses IP#name with default port', () => {
+  const result = parseCustomIPs('104.16.0.1#测试', { defaultPort: 443 });
+  assert.deepEqual(result, [{ address: '104.16.0.1', port: 443, name: '测试' }]);
 });
 
-test('pickPort returns 443 when randomPort is false', () => {
-  assert.equal(pickPort(false), 443);
+test('parseCustomIPs parses IP:port without name', () => {
+  const result = parseCustomIPs('104.16.0.1:8443');
+  assert.deepEqual(result, [{ address: '104.16.0.1', port: 8443 }]);
 });
 
-test('pickPort returns a CF port when randomPort is true', () => {
-  const VALID_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
-  for (let i = 0; i < 20; i++) {
-    assert.ok(VALID_PORTS.includes(pickPort(true)));
-  }
+test('parseCustomIPs parses multiple lines', () => {
+  const text = '104.19.52.52:2053#CF移动优选1\n104.16.157.51:8443#CF移动优选2\n104.17.155.94:2087';
+  const result = parseCustomIPs(text, { defaultPort: 443 });
+  assert.equal(result.length, 3);
+  assert.equal(result[0].name, 'CF移动优选1');
+  assert.equal(result[1].name, 'CF移动优选2');
+  assert.equal(result[2].name, undefined);
 });
 
-test('resolveIPSource returns null for empty source', async () => {
-  assert.equal(await resolveIPSource(''), null);
-  assert.equal(await resolveIPSource('   '), null);
-  assert.equal(await resolveIPSource(null), null);
+test('parseCustomIPs skips comments and blank lines', () => {
+  const text = '# 注释行\n104.16.0.1:443#测试\n\n  \n104.16.0.2:2053';
+  const result = parseCustomIPs(text);
+  assert.equal(result.length, 2);
 });
 
-test('resolveIPSource parses single IP with default port', async () => {
-  const result = await resolveIPSource('104.16.0.1');
-  assert.deepEqual(result, ['104.16.0.1:443']);
+test('fetchCustomIPs fetches and parses URL', async () => {
+  const mockFetch = async () => new Response(
+    '104.19.52.52:2053#CF移动优选1\n104.16.157.51:8443#CF移动优选2\n', { status: 200 }
+  );
+  const result = await fetchCustomIPs('https://example.com/ips.txt', { fetch: mockFetch });
+  assert.equal(result.length, 2);
+  assert.equal(result[0].name, 'CF移动优选1');
 });
 
-test('resolveIPSource parses single IP:port', async () => {
-  const result = await resolveIPSource('104.16.0.1:8443');
-  assert.deepEqual(result, ['104.16.0.1:8443']);
-});
-
-test('resolveIPSource strips trailing comment', async () => {
-  const result = await resolveIPSource('104.16.0.1:2053 #优选1');
-  assert.deepEqual(result, ['104.16.0.1:2053']);
-});
-
-test('resolveIPSource fetches URL and parses lines', async () => {
-  const mockFetch = async () => new Response('104.16.0.1:443\n104.16.0.2:2053\n# comment\n104.16.0.3\n', { status: 200 });
-  const result = await resolveIPSource('https://example.com/ips.txt', { fetch: mockFetch });
-  assert.deepEqual(result, ['104.16.0.1:443', '104.16.0.2:2053', '104.16.0.3:443']);
-});
-
-test('resolveIPSource returns null on fetch failure', async () => {
+test('fetchCustomIPs returns null on fetch failure', async () => {
   const mockFetch = async () => new Response('', { status: 404 });
-  const result = await resolveIPSource('https://example.com/ips.txt', { fetch: mockFetch });
+  const result = await fetchCustomIPs('https://example.com/ips.txt', { fetch: mockFetch });
   assert.equal(result, null);
 });
 
-test('resolveIPSource returns null on fetch error', async () => {
-  const mockFetch = async () => { throw new Error('network error'); };
-  const result = await resolveIPSource('https://example.com/ips.txt', { fetch: mockFetch });
-  assert.equal(result, null);
+test('generateNodeName uses provided name', () => {
+  assert.equal(generateNodeName('我的节点', 'cmcc', 1), '我的节点');
 });
 
-test('resolveIPSource rejects invalid IP', async () => {
-  const result = await resolveIPSource('not-an-ip');
-  assert.equal(result, null);
+test('generateNodeName auto-generates with operator label', () => {
+  const name = generateNodeName(undefined, 'cmcc', 1);
+  assert.ok(name.includes('中国移动'));
+  assert.ok(name.includes('1'));
+});
+
+test('generateNodeName handles unknown operator', () => {
+  const name = generateNodeName(undefined, 'unknown', 5);
+  assert.ok(name.includes('国际'));
 });

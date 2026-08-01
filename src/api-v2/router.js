@@ -13,7 +13,7 @@ import { createGovernanceService, validateBanTarget } from '../users/governance.
 import { jsonResponse, textResponse } from '../utils/http.js';
 import { identifyOperator } from '../net/operator.js';
 import { getCIDRList } from '../net/cidr.js';
-import { generateIPs, pickPort, resolveIPSource } from '../net/ip-pool.js';
+import { generateIPs, parseCustomIPs, fetchCustomIPs, generateNodeName } from '../net/ip-pool.js';
 
 export function createApiRouter({ users, sessions }) {
   const userService = createUserService(users);
@@ -67,12 +67,12 @@ async function buildSubscription(env, user, request) {
   if (config.ECH) nodes = nodes.map((node) => withECH(node, { enabled: true, ...config.ECHConfig }));
 
   const optIP = config.节点参数?.优选IP;
-  if (optIP?.启用) {
-    const ips = await resolveOptimizedIPs(optIP, request);
-    if (ips && ips.length > 0) {
-      nodes = nodes.map((node) => {
-        const ip = ips[Math.floor(Math.random() * ips.length)];
-        return { ...node, address: ip.split(':')[0], port: Number(ip.split(':')[1]) };
+  if (optIP?.模式) {
+    const replacements = await resolveIPReplacements(optIP, request);
+    if (replacements && replacements.length > 0) {
+      nodes = nodes.map((node, i) => {
+        const rep = replacements[i % replacements.length];
+        return { ...node, address: rep.address, port: rep.port };
       });
     }
   }
@@ -80,18 +80,45 @@ async function buildSubscription(env, user, request) {
   return generateSubscription(nodes);
 }
 
-async function resolveOptimizedIPs(optIP, request) {
-  if (optIP.自定义IP源) {
-    const ips = await resolveIPSource(optIP.自定义IP源);
-    if (ips) return ips;
+async function resolveIPReplacements(optIP, request) {
+  const operator = identifyOperator(request.cf);
+  const randomPort = optIP.随机端口;
+
+  if (optIP.模式 === 'custom') {
+    const source = optIP.自定义IP源;
+    if (!source) return null;
+
+    // URL 模式
+    if (/^https?:\/\//i.test(source)) {
+      const entries = await fetchCustomIPs(source, { defaultPort: randomPort ? undefined : 443 });
+      if (!entries) return null;
+      return entries.map((entry, i) => ({
+        ...entry,
+        name: generateNodeName(entry.name, operator, i + 1),
+      }));
+    }
+
+    // 文本模式（多行 IP 列表）
+    const entries = parseCustomIPs(source, { defaultPort: randomPort ? undefined : 443 });
+    if (!entries) return null;
+    return entries.map((entry, i) => ({
+      ...entry,
+      name: generateNodeName(entry.name, operator, i + 1),
+    }));
   }
 
-  const operator = identifyOperator(request.cf);
-  const cidrs = await getCIDRList(operator);
-  if (!cidrs || cidrs.length === 0) return null;
+  // optimized 或 random 模式
+  const cidrs = optIP.模式 === 'optimized'
+    ? await getCIDRList(operator)
+    : await getCIDRList('cf');  // random 模式用全部 CF 段
 
-  const ports = optIP.随机端口 ? undefined : [443];
-  return generateIPs(cidrs, 16, { ports });
+  if (!cidrs || cidrs.length === 0) return null;
+  const ips = generateIPs(cidrs, 16, { ports: randomPort ? undefined : [443] });
+  return ips.map((ip, i) => {
+    const [address, port] = ip.split(':');
+    return { address, port: Number(port), name: generateNodeName(undefined, operator, i + 1) };
+  });
+}
 
 function randomPathSegment() {
   const bytes = crypto.getRandomValues(new Uint8Array(6));

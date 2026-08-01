@@ -7,7 +7,10 @@ import { NEED_MORE, protocolError, ready } from './types.js';
 const encoder = new TextEncoder();
 
 export function createTrojanParser(credentials, limits = {}) {
-  const expected = encoder.encode(sha224Text(credentials?.secret || credentials?.trojanSecret || ''));
+  if (!credentials?.secret && !credentials?.trojanSecret) {
+    return { push: () => ({ status: 'error', code: 'INVALID_CREDENTIALS' }) };
+  }
+  const expected = encoder.encode(sha224Text(credentials?.secret || credentials?.trojanSecret));
   const maxBytes = Number(limits.maxFirstPacketBytes || 64 * 1024);
   let buffer = new Uint8Array();
   let finished = false;
@@ -39,6 +42,7 @@ export function createTrojanParser(credentials, limits = {}) {
         port,
         isUDP: command === 3,
         payload,
+        responseHeader: new Uint8Array(0),
       }), payload);
     },
   };

@@ -6,15 +6,17 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
     throw new AppError('INVALID_WEBSOCKET_REQUEST', 400);
   }
   const Pair = runtime.WebSocketPair;
-  if (!Pair) throw new AppError('WEBSOCKET_UNAVAILABLE', 501);
+  const Resp = runtime.Response || globalThis.Response;
+  if (!Pair || !Resp) throw new AppError('WEBSOCKET_UNAVAILABLE', 501);
   const pair = new Pair();
   const client = pair[0];
   const server = pair[1];
   server.binaryType = 'arraybuffer';
   server.accept();
 
-  const maxFrameBytes = Number(limits?.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
-  const maxQueuedBytes = Number(limits?.maxQueuedBytes || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const maxFrameBytes = Math.max(1, Number(limits?.maxFrameBytes) || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxQueuedBytes = Math.max(1024, Number(limits?.maxQueuedBytes) || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const maxQueueSize = Math.max(16, Number(limits?.maxQueueSize) || DEFAULT_TRANSPORT_LIMITS.maxQueueSize);
   const queue = [];
   let queuedBytes = 0;
   let controller;
@@ -23,18 +25,23 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
     start(value) { controller = value; },
     pull() {
       const chunk = queue.shift();
-      if (chunk) { queuedBytes -= chunk.byteLength; controller.enqueue(chunk); }
+      if (chunk) {
+        queuedBytes -= chunk.byteLength;
+        if (queuedBytes < 0) queuedBytes = 0;
+        try { controller.enqueue(chunk); } catch {}
+      }
     },
     cancel() { try { server.close(1000, 'cancelled'); } catch {} },
   });
   server.addEventListener('message', async (event) => {
+    if (closed) return;
     if (typeof event.data === 'string') {
       controller.error(new AppError('WEBSOCKET_TEXT_UNSUPPORTED', 400));
       try { server.close(1003, 'binary only'); } catch {}
       return;
     }
     const chunk = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : toBytes(event.data);
-    if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes) {
+    if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes || queue.length >= maxQueueSize) {
       closed = true;
       try { controller.error(new AppError('WEBSOCKET_BUFFER_LIMIT', 413)); } catch {}
       try { server.close(1009, 'message too large'); } catch {}
@@ -47,17 +54,20 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
   server.addEventListener('error', (event) => { closed = true; try { controller.error(event.error || new Error('websocket error')); } catch {} });
 
   const earlyData = readEarlyData(request.headers.get('sec-websocket-protocol'));
-  if (earlyData.bytes.byteLength) controller.enqueue(earlyData.bytes);
+  if (earlyData.bytes.byteLength && controller) controller.enqueue(earlyData.bytes);
 
   return {
     readable,
-    async write(chunk) { if (!closed) server.send(toBytes(chunk)); },
+    async write(chunk) {
+      if (closed) return;
+      try { server.send(toBytes(chunk)); } catch { closed = true; }
+    },
     async close(reason) {
       if (closed) return;
       closed = true;
       try { server.close(reason ? 1011 : 1000, reason ? 'pipeline error' : 'done'); } catch {}
     },
-    response: new runtime.Response(null, {
+    response: new Resp(null, {
       status: 101,
       webSocket: client,
       headers: earlyData.protocol ? { 'sec-websocket-protocol': earlyData.protocol } : undefined,
@@ -67,8 +77,8 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
 }
 
 function readEarlyData(header) {
-  const protocol = String(header || '').split(',')[0].trim();
-  // 只识别 ed. 前缀的 early-data，避免普通子协议被误解析
+  if (!header) return { protocol: '', bytes: new Uint8Array() };
+  const protocol = String(header).split(',')[0].trim();
   if (!protocol.startsWith('ed.')) return { protocol: '', bytes: new Uint8Array() };
   const payload = protocol.slice(3);
   if (!/^[A-Za-z0-9_-]+$/.test(payload)) return { protocol: '', bytes: new Uint8Array() };

@@ -1,12 +1,15 @@
 import { AppError } from '../core/errors.js';
 
 export async function getGlobalConfig(env) {
-  if (!env.KV) return {};
+  if (!env.KV) throw new AppError('KV_NOT_BOUND', 500, 'KV 未绑定，无法读取全局配置');
 
   try {
     const value = await env.KV.get('global_config', 'text');
+    if (value === null) return {};
     return parseJson(value, {});
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    console.error('读取全局配置失败:', error);
     return {};
   }
 }

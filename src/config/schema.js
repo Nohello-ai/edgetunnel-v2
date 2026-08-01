@@ -6,7 +6,7 @@ const DEFAULT_ECH_DNS = 'https://odvr.nic.cz/doh';
 const DEFAULT_ECH_SNI = 'cloudflare-ech.com';
 
 export function normalizeUserConfig(input, fallback = {}) {
-  const config = input && typeof input === 'object' ? input : {};
+  const config = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const now = new Date().toISOString();
 
   return {
@@ -46,7 +46,7 @@ export function normalizeGlobalConfig(input, fallback = {}) {
     ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
     ECHConfig: normalizeECHConfig(config.ECHConfig, fallback.ECHConfig),
     settings: normalizeObject(config.settings ?? fallback.settings),
-    updatedAt: new Date().toISOString(),
+    updatedAt: config.updatedAt || new Date().toISOString(),
   };
 }
 
@@ -75,6 +75,7 @@ function normalizeObject(value) {
 }
 
 function normalizeHosts(value) {
+  if (value == null) return ['edgetunnel'];
   const items = Array.isArray(value) ? value : [value];
   const hosts = items
     .flatMap((item) => String(item || '').split(/[\n,，]/g))

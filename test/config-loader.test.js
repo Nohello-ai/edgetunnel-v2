@@ -26,8 +26,16 @@ test('putGlobalConfig 成功时写入序列化配置', async () => {
   assert.deepEqual(writes, [['global_config', '{"HOSTS":["a.com"]}']]);
 });
 
+test('getGlobalConfig 在 KV 未绑定时抛出错误', async () => {
+  await assert.rejects(getGlobalConfig({}), (error) => {
+    assert.equal(error.code, 'KV_NOT_BOUND');
+    return true;
+  });
+});
+
 test('getGlobalConfig 对损坏的 JSON 与缺失 KV 返回空对象', async () => {
-  assert.deepEqual(await getGlobalConfig({}), {});
-  const env = { KV: { async get() { return 'not json'; } } };
+  const env = { KV: { async get() { return null; } } };
   assert.deepEqual(await getGlobalConfig(env), {});
+  const env2 = { KV: { async get() { return 'not json'; } } };
+  assert.deepEqual(await getGlobalConfig(env2), {});
 });

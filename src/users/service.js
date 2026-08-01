@@ -25,6 +25,7 @@ export function createUserService(repository) {
       return publicUser(user);
     },
     async update(userID, fields, actor) {
+      if (actor?.role !== 'admin') throw new AppError('ADMIN_REQUIRED', 403);
       const allowed = {};
       if ('disabled' in fields) allowed.disabled = Boolean(fields.disabled);
       if ('quotaBytes' in fields) allowed.quotaBytes = validQuota(fields.quotaBytes);
@@ -45,6 +46,7 @@ export function createUserService(repository) {
     async get(userID) { return publicUser(await repository.getByID(userID)); },
     async list() { return Promise.all((await repository.list()).map(publicUser)); },
     async delete(userID, actor) {
+      if (actor?.role !== 'admin') throw new AppError('ADMIN_REQUIRED', 403);
       if (actor?.userID === userID) throw new AppError('SELF_DELETE_FORBIDDEN', 400);
       const user = await repository.getByID(userID);
       if (user?.role === 'admin' && await repository.countAdmins() <= 1) throw new AppError('LAST_ADMIN_REQUIRED', 400);

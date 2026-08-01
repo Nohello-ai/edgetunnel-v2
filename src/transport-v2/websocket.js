@@ -68,9 +68,12 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
 
 function readEarlyData(header) {
   const protocol = String(header || '').split(',')[0].trim();
-  if (!protocol || !/^[A-Za-z0-9_-]+$/.test(protocol)) return { protocol: '', bytes: new Uint8Array() };
+  // 只识别 ed. 前缀的 early-data，避免普通子协议被误解析
+  if (!protocol.startsWith('ed.')) return { protocol: '', bytes: new Uint8Array() };
+  const payload = protocol.slice(3);
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) return { protocol: '', bytes: new Uint8Array() };
   try {
-    const normalized = protocol.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(protocol.length / 4) * 4, '=');
+    const normalized = payload.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
     return { protocol, bytes: Uint8Array.from(atob(normalized), (char) => char.charCodeAt(0)) };
   } catch {
     return { protocol: '', bytes: new Uint8Array() };

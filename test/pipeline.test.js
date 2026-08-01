@@ -52,6 +52,28 @@ test('pipeline finishes when remote TCP closes before client transport', async (
   assert.equal(inputController.desiredSize, 0);
 });
 
+test('pipeline throws TCP_CONNECT_TIMEOUT when socket hangs', async () => {
+  const packet = Uint8Array.from([1, ...uuidBytes, 0, 1, 0, 80, 2, 7, ...new TextEncoder().encode('example')]);
+  const input = new ReadableStream({ start(c) { c.enqueue(packet); c.close(); } });
+  const transport = { readable: input, write: async () => {}, close: async () => {} };
+  const socket = {
+    opened: new Promise(() => {}), // 永不 resolve
+    writable: new WritableStream({ write() {} }),
+    readable: new ReadableStream({ start(c) { c.close(); } }),
+    close() {},
+  };
+
+  await assert.rejects(
+    () => runPipeline({
+      transport,
+      session: { protocol: 'vless', userID: UUID, user: { trojanSecret: '' } },
+      connector: { connect: () => socket },
+      meter: { addUpload() {}, addDownload() {} },
+    }),
+    /TCP_CONNECT_TIMEOUT/,
+  );
+});
+
 function fakeSocket(downloads) {
   const writes = [];
   return {

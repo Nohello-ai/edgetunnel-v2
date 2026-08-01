@@ -70,7 +70,12 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
 
 async function forwardTcp({ reader, transport, connector, request, meter }) {
   const socket = connector.connect({ hostname: request.hostname, port: request.port });
-  if (socket.opened) await socket.opened;
+
+  // 建连超时 5 秒
+  if (socket.opened) {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError('TCP_CONNECT_TIMEOUT', 408)), 5000));
+    await Promise.race([socket.opened, timeout]);
+  }
   const remoteWriter = socket.writable.getWriter();
   const remoteReader = socket.readable.getReader();
 

@@ -40,6 +40,7 @@ export function normalizeGlobalConfig(input, fallback = {}) {
     HOST: String(config.HOST || fallback.HOST || hosts[0] || 'edgetunnel'),
     HOSTS: hosts,
     订阅参数: String(config.订阅参数 ?? fallback.订阅参数 ?? ''),
+    订阅转换: normalizeSubConverter(config.订阅转换),
     反代: proxyGroup,
     节点参数: nodeGroup,
     ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
@@ -98,6 +99,7 @@ function normalizeNodeGroup(value) {
     随机路径: Boolean(config.随机路径 ?? false),
     启用0RTT: Boolean(config.启用0RTT ?? false),
     TLS分片: normalizeTlsFragment(config.TLS分片),
+    节点数量: normalizeInt(config.节点数量, 16, 1, 64),
     优选IP: normalizeOptimizedIP(config.优选IP),
   };
 }
@@ -142,6 +144,13 @@ function normalizeSocks5Config(value) {
     全局: Boolean(config.全局 ?? false),
     账号: String(config.账号 || ''),
     白名单: Array.isArray(config.白名单) ? config.白名单.map((item) => String(item || '').trim()).filter(Boolean) : [],
+  };
+}
+
+function normalizeSubConverter(value) {
+  const config = normalizeObject(value);
+  return {
+    SUBAPI: String(config.SUBAPI || config.subapi || '').trim() || 'https://SUBAPI.cmliussss.net',
   };
 }
 

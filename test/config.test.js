@@ -10,6 +10,22 @@ test('config keeps protocol and transport lists independent', () => {
   assert.equal(config.ECHConfig.domain, '0');
 });
 
+test('config defaults node count and sub converter', () => {
+  const config = normalizeGlobalConfig({});
+  assert.equal(config.节点参数.节点数量, 16);
+  assert.ok(config.订阅转换.SUBAPI);
+});
+
+test('config accepts node count', () => {
+  const config = normalizeGlobalConfig({ 节点参数: { 节点数量: 8 } });
+  assert.equal(config.节点参数.节点数量, 8);
+});
+
+test('config clamps node count within range', () => {
+  assert.equal(normalizeGlobalConfig({ 节点参数: { 节点数量: 0 } }).节点参数.节点数量, 1);
+  assert.equal(normalizeGlobalConfig({ 节点参数: { 节点数量: 100 } }).节点参数.节点数量, 64);
+});
+
 test('config defaults optimized IP to disabled', () => {
   const config = normalizeGlobalConfig({});
   assert.equal(config.节点参数.优选IP.模式, '');

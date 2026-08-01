@@ -66,9 +66,10 @@ async function buildSubscription(env, user, request) {
   });
   if (config.ECH) nodes = nodes.map((node) => withECH(node, { enabled: true, ...config.ECHConfig }));
 
+  const nodeCount = config.节点参数?.节点数量 || 16;
   const optIP = config.节点参数?.优选IP;
   if (optIP?.模式) {
-    const replacements = await resolveIPReplacements(optIP, request);
+    const replacements = await resolveIPReplacements(optIP, request, nodeCount);
     if (replacements && replacements.length > 0) {
       nodes = nodes.map((node, i) => {
         const rep = replacements[i % replacements.length];
@@ -77,15 +78,30 @@ async function buildSubscription(env, user, request) {
     }
   }
 
-  return generateSubscription(nodes);
+  let sub = generateSubscription(nodes);
+
+  // 订阅转换：如果有 target 参数，走云端 SUBAPI
+  const target = url.searchParams.get('target');
+  if (target && config.订阅转换?.SUBAPI) {
+    const rawURL = `${url.protocol}//${url.host}${url.pathname}?${url.searchParams.toString()}`;
+    const convertURL = `${config.订阅转换.SUBAPI}/sub?target=${encodeURIComponent(target)}&url=${encodeURIComponent(rawURL)}`;
+    try {
+      const res = await fetch(convertURL);
+      if (res.ok) sub = await res.text();
+    } catch {
+      // 转换失败，返回原始订阅
+    }
+  }
+
+  return sub;
 }
 
-async function resolveIPReplacements(optIP, request) {
+async function resolveIPReplacements(optIP, request, nodeCount = 16) {
   const operator = identifyOperator(request.cf);
   const randomPort = optIP.随机端口;
 
+  // custom 模式：尝试自定义源，失败则降级到全频段随机
   if (optIP.模式 === 'custom') {
-    // 优选网站URL 优先，其次 自定义IP源
     let entries;
     if (optIP.优选网站URL) {
       entries = await fetchCustomIPs(optIP.优选网站URL);
@@ -94,21 +110,32 @@ async function resolveIPReplacements(optIP, request) {
         ? await fetchCustomIPs(optIP.自定义IP源)
         : parseCustomIPs(optIP.自定义IP源);
     }
-    if (!entries) return null;
-    return entries.map((entry, i) => ({
-      address: entry.address,
-      port: entry.port ?? pickPort(randomPort),
-      name: generateNodeName(entry.name, operator, i + 1),
-    }));
+
+    if (entries) {
+      return entries.map((entry, i) => ({
+        address: entry.address,
+        port: entry.port ?? pickPort(randomPort),
+        name: generateNodeName(entry.name, operator, i + 1),
+      }));
+    }
+
+    // 自定义源不可用，降级到全频段随机
+    const fallback = await getCIDRList('cf');
+    if (!fallback || fallback.length === 0) return null;
+    const ips = generateIPs(fallback, nodeCount, { ports: randomPort ? undefined : [443] });
+    return ips.map((ip, i) => {
+      const [address, port] = ip.split(':');
+      return { address, port: Number(port), name: `Ip获取失败${i + 1}` };
+    });
   }
 
   // optimized 或 random 模式
   const cidrs = optIP.模式 === 'optimized'
     ? await getCIDRList(operator)
-    : await getCIDRList('cf');  // random 模式用全部 CF 段
+    : await getCIDRList('cf');
 
   if (!cidrs || cidrs.length === 0) return null;
-  const ips = generateIPs(cidrs, 16, { ports: randomPort ? undefined : [443] });
+  const ips = generateIPs(cidrs, nodeCount, { ports: randomPort ? undefined : [443] });
   return ips.map((ip, i) => {
     const [address, port] = ip.split(':');
     return { address, port: Number(port), name: generateNodeName(undefined, operator, i + 1) };

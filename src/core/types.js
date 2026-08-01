@@ -28,7 +28,7 @@ export function createProxyRequest(input) {
     hostname: input.hostname,
     port: input.port,
     isUDP: Boolean(input.isUDP),
-    payload: input.payload || new Uint8Array(),
-    responseHeader: input.responseHeader || new Uint8Array(),
+    payload: new Uint8Array(input.payload || []),
+    responseHeader: new Uint8Array(input.responseHeader || []),
   });
 }

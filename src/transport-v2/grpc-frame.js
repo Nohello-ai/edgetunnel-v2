@@ -1,7 +1,7 @@
 import { DEFAULT_TRANSPORT_LIMITS } from './limits.js';
 
 export function createGrpcFrameParser(limits = {}) {
-  const maxFrameBytes = Number(limits.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxFrameBytes = Math.max(1, Number(limits.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes));
   let buffer = new Uint8Array();
 
   return {

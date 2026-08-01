@@ -16,6 +16,8 @@ export function toBytes(value) {
 export function uuidToBytes(uuid) {
   const hex = String(uuid).replaceAll('-', '');
   if (!/^[0-9a-f]{32}$/i.test(hex)) return null;
+  if (Number.parseInt(hex[12], 16) !== 4) return null;
+  if ((Number.parseInt(hex[16], 16) & 0xc) !== 0x8) return null;
   return Uint8Array.from(hex.match(/../g), (pair) => Number.parseInt(pair, 16));
 }
 

@@ -17,7 +17,11 @@ export function createSessionService(env, users, options = {}) {
       if (!token) return null;
       const hash = await digest(token);
       const row = await env.DB.prepare('SELECT user_id,expires_at,revoked_at FROM sessions WHERE token_hash = ?').bind(hash).first();
-      if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now()) return null;
+      if (!row || row.revoked_at) return null;
+      if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) {
+        env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash).run().catch(() => {});
+        return null;
+      }
       const user = await users.getByID(row.user_id);
       if (!user || user.disabled) return null;
       const ban = await env.DB.prepare('SELECT 1 AS ok FROM bans WHERE user_id = ? AND (until IS NULL OR until > ?) LIMIT 1')

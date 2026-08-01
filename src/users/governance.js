@@ -22,6 +22,9 @@ export function createGovernanceService(env) {
 function parseUntil(value) {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) throw new AppError('BAN_UNTIL_INVALID', 400, '封禁截止时间格式无效');
+  const maxDate = new Date();
+  maxDate.setFullYear(maxDate.getFullYear() + 10);
+  if (timestamp > maxDate.getTime()) throw new AppError('BAN_UNTIL_TOO_FAR', 400, '封禁截止时间不能超过 10 年');
   return new Date(timestamp).toISOString();
 }
 

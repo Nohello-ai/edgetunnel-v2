@@ -16,7 +16,7 @@ function parseTypedAddress(bytes, offset, types) {
   if (type === types.domain) {
     if (bytes.byteLength < offset + 2) return { needMore: true };
     const length = bytes[offset + 1];
-    if (length === 0) return { error: 'INVALID_ADDRESS' };
+    if (length === 0 || length > 253) return { error: 'INVALID_ADDRESS' };
     if (bytes.byteLength < offset + 2 + length) return { needMore: true };
     return { hostname: new TextDecoder().decode(bytes.slice(offset + 2, offset + 2 + length)), offset: offset + 2 + length };
   }

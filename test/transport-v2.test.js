@@ -31,6 +31,8 @@ test('gRPC Hunk uses protobuf bytes field wire format', async () => {
   const parsed = createGrpcFrameParser().push((await responseRead).value).messages[0];
   assert.deepEqual([...decodeGrpcHunk(parsed)], [4, 5]);
   await transport.close();
+  assert.equal(transport.response.status, 200);
+  assert.equal(transport.response.headers.get('grpc-status'), '0');
 });
 
 test('gRPC parser rejects compression and oversized frames', () => {
@@ -49,4 +51,25 @@ test('XHTTP exposes request and response as independent byte streams', async () 
   await transport.write(Uint8Array.of(9));
   assert.deepEqual([...(await responseRead).value], [9]);
   await transport.close();
+});
+
+test('XHTTP rejects unsupported stream mode header', () => {
+  const request = new Request('https://example.com/xhttp/id', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-http', 'x-http-mode': 'packet' },
+    body: Uint8Array.of(7, 8),
+    duplex: 'half',
+  });
+  assert.throws(() => openXhttpTransport(request), /XHTTP_MODE_UNSUPPORTED/);
+});
+
+test('XHTTP accepts the standard stream-one mode', () => {
+  const request = new Request('https://example.com/xhttp/id', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-http', 'x-http-mode': 'stream-one' },
+    body: Uint8Array.of(7, 8),
+    duplex: 'half',
+  });
+  const transport = openXhttpTransport(request);
+  assert.equal(transport.response.status, 200);
 });

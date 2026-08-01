@@ -36,7 +36,8 @@ export function openGrpcTransport(request, limits) {
       else await writer.close().catch(() => {});
     },
     response: new Response(responseStream.readable, {
-      headers: { 'content-type': 'application/grpc', 'grpc-encoding': 'identity', 'cache-control': 'no-store' },
+      status: 200,
+      headers: { 'content-type': 'application/grpc', 'grpc-encoding': 'identity', 'grpc-status': '0', 'cache-control': 'no-store' },
     }),
     metadata: Object.freeze({ name: 'grpc' }),
   };

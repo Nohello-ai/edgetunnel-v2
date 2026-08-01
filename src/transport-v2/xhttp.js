@@ -6,6 +6,9 @@ export function openXhttpTransport(request) {
     throw new AppError('INVALID_XHTTP_REQUEST', 400);
   }
   if (!request.body) throw new AppError('XHTTP_BODY_REQUIRED', 400);
+  if (type.startsWith('application/x-http') && request.headers.get('x-http-mode') && request.headers.get('x-http-mode') !== 'stream-one') {
+    throw new AppError('XHTTP_MODE_UNSUPPORTED', 400);
+  }
 
   const responseStream = new TransformStream();
   const writer = responseStream.writable.getWriter();

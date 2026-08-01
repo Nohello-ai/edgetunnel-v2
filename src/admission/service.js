@@ -22,7 +22,7 @@ export function parseDataFlowRoute(url) {
   return { transport, userID, protocol, suffix: segments.slice(3) };
 }
 
-export function createAdmissionService({ users, bans, usage, config }) {
+export function createAdmissionService({ users, bans, usage, config, quotaDO }) {
   return {
     async admit(route) {
       if (!route || !isValidUuidV4(route.userID)) {
@@ -36,11 +36,17 @@ export function createAdmissionService({ users, bans, usage, config }) {
       const activeBan = await bans.getActive(user.userID);
       if (activeBan) throw new AppError('USER_BANNED', 403);
 
-      const currentUsage = await usage.get(user.userID);
+      // 从 DO 拿权威余额(毫秒级,同机执行)
       const runtimeConfig = await config.getRuntime();
       const quotaBytes = resolveQuota(user, runtimeConfig);
-      if (quotaBytes > 0 && Number(currentUsage.total || 0) >= quotaBytes) {
-        throw new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403);
+
+      let admission = { allowed: true, remaining: 0, budget: 0, resetVersion: 0 };
+      if (quotaDO && quotaBytes > 0) {
+        const id = quotaDO.idFromName(route.userID);
+        const stub = quotaDO.get(id);
+        const resp = await stub.fetch('https://do/admit');
+        admission = await resp.json().catch(() => admission);
+        if (!admission.allowed) throw new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403);
       }
 
       const protocol = resolveProtocol(route, runtimeConfig);
@@ -53,8 +59,10 @@ export function createAdmissionService({ users, bans, usage, config }) {
         user,
         protocol,
         transport: route.transport,
-        usage: currentUsage,
+        usage: { upload: 0, download: 0, total: quotaBytes > 0 ? (quotaBytes - admission.remaining) : 0 },
         quotaBytes,
+        budget: admission.budget,
+        resetVersion: admission.resetVersion,
       });
     },
   };

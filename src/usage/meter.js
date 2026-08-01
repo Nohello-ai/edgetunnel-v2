@@ -1,7 +1,8 @@
-export function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024, maxBytes = 0 }) {
+export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 1024, resetVersion = 0 }) {
   let pendingUpload = 0;
   let pendingDownload = 0;
   let counted = 0;
+  let budget = 0;
   let flushing = null;
   let needsReschedule = false;
 
@@ -18,11 +19,20 @@ export function createUsageMeter({ userID, repository, ctx, flushThreshold = 256
       while (pendingUpload !== 0 || pendingDownload !== 0) {
         const upload = pendingUpload;
         const download = pendingDownload;
+        const delta = upload + download;
         pendingUpload = 0;
         pendingDownload = 0;
         try {
-          await repository.increment(userID, upload, download);
-        } catch {
+          const resp = await quotaDO.fetch(`https://do/report`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ delta, resetVersion }),
+          });
+          const result = await resp.json().catch(() => ({}));
+          if (!result.allowed) throw new UsageLimitError();
+          budget = result.budget || budget;
+        } catch (error) {
+          if (error instanceof UsageLimitError) throw error;
           pendingUpload += upload;
           pendingDownload += download;
           break;
@@ -40,10 +50,15 @@ export function createUsageMeter({ userID, repository, ctx, flushThreshold = 256
 
   const add = (direction, bytes) => {
     const value = validBytes(bytes);
-    if (maxBytes > 0 && counted + value > maxBytes) throw new UsageLimitError();
     counted += value;
     if (direction === 'upload') pendingUpload += value;
     else pendingDownload += value;
+
+    // 本地预算检查:超过预算触发立即上报
+    if (budget > 0 && counted >= budget) {
+      schedule();
+      return;
+    }
     if (pendingUpload + pendingDownload >= flushThreshold) schedule();
   };
 
@@ -55,6 +70,8 @@ export function createUsageMeter({ userID, repository, ctx, flushThreshold = 256
       add('download', bytes);
     },
     flush,
+    setBudget(b) { budget = b; },
+    getBudget() { return budget; },
   };
 }
 

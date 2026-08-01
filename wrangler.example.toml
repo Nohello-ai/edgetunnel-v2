@@ -15,6 +15,17 @@ id = "replace-with-your-kv-id"
 binding = "ADMIN_BUCKET"
 bucket_name = "edgetunnel-admin"
 
+# Durable Object: 强一致流量计量与断连裁判
+# 每个 UUID 对应一个 DO 实例,串行处理该用户所有连接的流量计数
+[durable_objects]
+bindings = [
+  { name = "QUOTA_DO", class_name = "QuotaDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["QuotaDO"]
+
 # Set bootstrap credentials as encrypted secrets for the first request, then remove them:
 # wrangler secret put BOOTSTRAP_ADMIN_USER
 # wrangler secret put BOOTSTRAP_ADMIN_PASSWORD

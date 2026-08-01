@@ -25,11 +25,14 @@ function asAppError(error) {
 
 // src/config/loader.js
 async function getGlobalConfig(env) {
-  if (!env.KV) return {};
+  if (!env.KV) throw new AppError("KV_NOT_BOUND", 500, "KV \u672A\u7ED1\u5B9A\uFF0C\u65E0\u6CD5\u8BFB\u53D6\u5168\u5C40\u914D\u7F6E");
   try {
     const value = await env.KV.get("global_config", "text");
+    if (value === null) return {};
     return parseJson(value, {});
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    console.error("\u8BFB\u53D6\u5168\u5C40\u914D\u7F6E\u5931\u8D25:", error);
     return {};
   }
 }
@@ -81,7 +84,7 @@ function normalizeGlobalConfig(input, fallback = {}) {
     ECH: Boolean(config.ECH ?? fallback.ECH ?? false),
     ECHConfig: normalizeECHConfig(config.ECHConfig, fallback.ECHConfig),
     settings: normalizeObject(config.settings ?? fallback.settings),
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    updatedAt: config.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
   };
 }
 function normalizeEnum(value, allowed, fallback) {
@@ -96,6 +99,7 @@ function normalizeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 function normalizeHosts(value) {
+  if (value == null) return ["edgetunnel"];
   const items = Array.isArray(value) ? value : [value];
   const hosts = items.flatMap((item) => String(item || "").split(/[\n,，]/g)).map((item) => item.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].split(":")[0]).filter(Boolean);
   return hosts.length ? [...new Set(hosts)] : ["edgetunnel"];
@@ -333,12 +337,13 @@ function createAdmissionDependencies(env) {
       }
     },
     usage: createUsageRepository(env),
-    config: createRuntimeConfigService(env)
+    config: createRuntimeConfigService(env),
+    quotaDO: env.QUOTA_DO || null
   };
 }
 
 // src/core/types.js
-function createDataFlowSession({ user, protocol, transport, usage, quotaBytes }) {
+function createDataFlowSession({ user, protocol, transport, usage, quotaBytes, budget = 0, resetVersion = 0 }) {
   return Object.freeze({
     user: Object.freeze({
       userID: user.userID,
@@ -351,7 +356,9 @@ function createDataFlowSession({ user, protocol, transport, usage, quotaBytes })
     protocol,
     transport,
     usage: Object.freeze(usage || { upload: 0, download: 0, total: 0 }),
-    quotaBytes: Number(quotaBytes || 0)
+    quotaBytes: Number(quotaBytes || 0),
+    budget: Number(budget || 0),
+    resetVersion: Number(resetVersion || 0)
   });
 }
 function createProxyRequest(input) {
@@ -359,8 +366,8 @@ function createProxyRequest(input) {
     hostname: input.hostname,
     port: input.port,
     isUDP: Boolean(input.isUDP),
-    payload: input.payload || new Uint8Array(),
-    responseHeader: input.responseHeader || new Uint8Array()
+    payload: new Uint8Array(input.payload || []),
+    responseHeader: new Uint8Array(input.responseHeader || [])
   });
 }
 
@@ -539,15 +546,18 @@ var TRANSPORT_PATHS = Object.freeze({
   grpc: "grpc",
   xhttp: "xhttp"
 });
+var TRANSPORT_ALIASES = Object.freeze({ ws: "websocket", grpc: "grpc", xhttp: "xhttp" });
+var ALLOWED_TRANSPORTS = Object.freeze(["websocket", "grpc", "xhttp"]);
 function parseDataFlowRoute(url) {
   const segments = url.pathname.split("/").filter(Boolean);
+  if (segments.length < 3) return null;
   const transport = TRANSPORT_PATHS[segments[0]];
   const userID = segments[1] || url.searchParams.get("uid") || "";
   const protocol = segments[2] || url.searchParams.get("protocol") || "";
   if (!transport || !isValidUuidV4(userID) || !["vless", "trojan"].includes(protocol)) return null;
   return { transport, userID, protocol, suffix: segments.slice(3) };
 }
-function createAdmissionService({ users, bans, usage, config }) {
+function createAdmissionService({ users, bans, usage, config, quotaDO }) {
   return {
     async admit(route) {
       if (!route || !isValidUuidV4(route.userID)) {
@@ -558,11 +568,15 @@ function createAdmissionService({ users, bans, usage, config }) {
       if (user.disabled) throw new AppError("USER_DISABLED", 403);
       const activeBan = await bans.getActive(user.userID);
       if (activeBan) throw new AppError("USER_BANNED", 403);
-      const currentUsage = await usage.get(user.userID);
       const runtimeConfig = await config.getRuntime();
       const quotaBytes = resolveQuota(user, runtimeConfig);
-      if (quotaBytes > 0 && Number(currentUsage.total || 0) >= quotaBytes) {
-        throw new AppError("TRAFFIC_QUOTA_EXHAUSTED", 403);
+      let admission = { allowed: true, remaining: 0, budget: 0, resetVersion: 0 };
+      if (quotaDO && quotaBytes > 0) {
+        const id = quotaDO.idFromName(route.userID);
+        const stub = quotaDO.get(id);
+        const resp = await stub.fetch("https://do/admit");
+        admission = await resp.json().catch(() => admission);
+        if (!admission.allowed) throw new AppError("TRAFFIC_QUOTA_EXHAUSTED", 403);
       }
       const protocol = resolveProtocol(route, runtimeConfig);
       const allowedTransports = resolveTransports(runtimeConfig);
@@ -573,8 +587,10 @@ function createAdmissionService({ users, bans, usage, config }) {
         user,
         protocol,
         transport: route.transport,
-        usage: currentUsage,
-        quotaBytes
+        usage: { upload: 0, download: 0, total: quotaBytes > 0 ? quotaBytes - admission.remaining : 0 },
+        quotaBytes,
+        budget: admission.budget,
+        resetVersion: admission.resetVersion
       });
     }
   };
@@ -585,7 +601,9 @@ function resolveQuota(user, config) {
   return Number.isFinite(quota) && quota > 0 ? quota : 0;
 }
 function resolveProtocol(route, config) {
-  const enabled = Array.isArray(config.protocols) ? config.protocols : [config.protocol || "vless"];
+  let enabled = config.protocols;
+  if (typeof enabled === "string") enabled = enabled.split(",").map((s) => s.trim());
+  if (!Array.isArray(enabled)) enabled = [config.protocol || "vless"];
   if (!enabled.includes(route.protocol)) {
     throw new AppError("PROTOCOL_DISABLED", 403);
   }
@@ -593,7 +611,7 @@ function resolveProtocol(route, config) {
 }
 function resolveTransports(config) {
   const configured = Array.isArray(config.transports) ? config.transports : [config.transport || "websocket"];
-  return configured.filter((value) => ["websocket", "grpc", "xhttp"].includes(value));
+  return configured.map((value) => TRANSPORT_ALIASES[value] || value).filter((value) => ALLOWED_TRANSPORTS.includes(value));
 }
 
 // src/auth/password.js
@@ -899,7 +917,7 @@ function withECH(node, config = node?.ech) {
 }
 
 // src/users/service.js
-function createUserService(repository) {
+function createUserService(repository, env) {
   return {
     async create(input) {
       const username = normalizeUsername(input.username);
@@ -924,9 +942,11 @@ function createUserService(repository) {
         if (/UNIQUE|constraint/i.test(String(error?.message))) throw new AppError("USERNAME_TAKEN", 409, "\u7528\u6237\u540D\u5DF2\u5B58\u5728");
         throw error;
       }
+      await syncQuotaToDO(env, user.userID, user.quotaBytes);
       return publicUser(user);
     },
     async update(userID, fields, actor) {
+      if (actor?.role !== "admin") throw new AppError("ADMIN_REQUIRED", 403);
       const allowed = {};
       if ("disabled" in fields) allowed.disabled = Boolean(fields.disabled);
       if ("quotaBytes" in fields) allowed.quotaBytes = validQuota(fields.quotaBytes);
@@ -942,6 +962,8 @@ function createUserService(repository) {
       const user = await repository.update(userID, allowed);
       if (!user) throw new AppError("USER_NOT_FOUND", 404);
       if ("disabled" in allowed || "role" in allowed || "passwordHash" in allowed) await repository.revokeSessions(userID);
+      if ("quotaBytes" in allowed) await syncQuotaToDO(env, userID, allowed.quotaBytes);
+      if (allowed.disabled === true) await resetUuidInDO(env, userID);
       return publicUser(user);
     },
     async get(userID) {
@@ -951,6 +973,7 @@ function createUserService(repository) {
       return Promise.all((await repository.list()).map(publicUser));
     },
     async delete(userID, actor) {
+      if (actor?.role !== "admin") throw new AppError("ADMIN_REQUIRED", 403);
       if (actor?.userID === userID) throw new AppError("SELF_DELETE_FORBIDDEN", 400);
       const user = await repository.getByID(userID);
       if (user?.role === "admin" && await repository.countAdmins() <= 1) throw new AppError("LAST_ADMIN_REQUIRED", 400);
@@ -968,6 +991,28 @@ function randomToken(bytes) {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return [...data].map((v) => v.toString(16).padStart(2, "0")).join("");
 }
+async function syncQuotaToDO(env, userID, quota) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch("https://do/set-quota", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ quota })
+    });
+  } catch {
+  }
+}
+async function resetUuidInDO(env, userID) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch("https://do/reset-uuid", { method: "POST" });
+  } catch {
+  }
+}
 
 // src/users/governance.js
 function createGovernanceService(env) {
@@ -977,6 +1022,7 @@ function createGovernanceService(env) {
       const until = input.until ? parseUntil(input.until) : null;
       const createdAt = (/* @__PURE__ */ new Date()).toISOString();
       await env.DB.prepare(`INSERT INTO bans (user_id,reason,until,created_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason,until=excluded.until,created_at=excluded.created_at`).bind(userID, reason, until, createdAt).run();
+      await resetUuidInDO2(env, userID);
       return { userID, reason, until, createdAt };
     },
     async unban(userID) {
@@ -990,7 +1036,19 @@ function createGovernanceService(env) {
 function parseUntil(value) {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) throw new AppError("BAN_UNTIL_INVALID", 400, "\u5C01\u7981\u622A\u6B62\u65F6\u95F4\u683C\u5F0F\u65E0\u6548");
+  const maxDate = /* @__PURE__ */ new Date();
+  maxDate.setFullYear(maxDate.getFullYear() + 10);
+  if (timestamp > maxDate.getTime()) throw new AppError("BAN_UNTIL_TOO_FAR", 400, "\u5C01\u7981\u622A\u6B62\u65F6\u95F4\u4E0D\u80FD\u8D85\u8FC7 10 \u5E74");
   return new Date(timestamp).toISOString();
+}
+async function resetUuidInDO2(env, userID) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch("https://do/reset-uuid", { method: "POST" });
+  } catch {
+  }
 }
 function validateBanTarget(user) {
   if (!user) throw new AppError("USER_NOT_FOUND", 404);
@@ -1224,10 +1282,10 @@ function randomIPInRange(baseIP, hostBits) {
 
 // src/api-v2/router.js
 function createApiRouter({ users, sessions }) {
-  const userService = createUserService(users);
   const governance = createGovernanceService;
   return async function handle(request, env) {
     try {
+      const userService = createUserService(users, env);
       const url = new URL(request.url);
       const auth = createAuthService(users, sessions, createLoginAttemptService(env));
       const current = await auth.resolve(request);
@@ -1244,8 +1302,8 @@ function createApiRouter({ users, sessions }) {
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return jsonResponse({ ok: true }, 200, { "set-cookie": await auth.logout(request) });
       if (url.pathname === "/api/auth/me" && request.method === "GET") {
         const u = requireUser(current);
-        const usage = await env.DB?.prepare("SELECT upload,download,total FROM usage WHERE user_id = ?").bind(u.userID).first();
-        return jsonResponse({ ok: true, user: { ...publicUser(u), usage: usage ? { upload: Number(usage.upload), download: Number(usage.download), total: Number(usage.total) } : { upload: 0, download: 0, total: 0 } } });
+        const usage = await fetchUsage(env, u.userID);
+        return jsonResponse({ ok: true, user: { ...publicUser(u), usage } });
       }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         requireAdmin(current);
@@ -1303,6 +1361,27 @@ async function readBody(request) {
   } catch {
     throw new AppError("INVALID_JSON", 400);
   }
+}
+async function fetchUsage(env, userID) {
+  if (env?.QUOTA_DO) {
+    try {
+      const id = env.QUOTA_DO.idFromName(userID);
+      const stub = env.QUOTA_DO.get(id);
+      const resp = await stub.fetch("https://do/snapshot");
+      const s = await resp.json();
+      return {
+        upload: 0,
+        download: 0,
+        total: s.totalUsed || 0,
+        quota: s.totalQuota || 0,
+        remaining: s.remaining || 0,
+        todayUsed: s.todayUsed || 0
+      };
+    } catch {
+    }
+  }
+  const row = await env.DB?.prepare("SELECT upload,download,total FROM usage WHERE user_id = ?").bind(userID).first();
+  return row ? { upload: Number(row.upload), download: Number(row.download), total: Number(row.total) } : { upload: 0, download: 0, total: 0 };
 }
 async function buildSubscription(env, user, request) {
   const url = new URL(request.url);
@@ -1398,10 +1477,11 @@ async function validateProxyConfig(body, request) {
 
 // src/auth/bootstrap.js
 async function bootstrapAdmin(env, repository) {
-  if (await repository.count() !== 0) return false;
+  const adminCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").first();
+  if (Number(adminCount?.count || 0) !== 0) return false;
   if (!env.BOOTSTRAP_ADMIN_USER || !env.BOOTSTRAP_ADMIN_PASSWORD) return false;
   try {
-    await createUserService(repository).create({ username: env.BOOTSTRAP_ADMIN_USER, password: env.BOOTSTRAP_ADMIN_PASSWORD, role: "admin" });
+    await createUserService(repository, env).create({ username: env.BOOTSTRAP_ADMIN_USER, password: env.BOOTSTRAP_ADMIN_PASSWORD, role: "admin" });
   } catch (error) {
     if (await repository.count() === 0) throw error;
     return false;
@@ -1427,7 +1507,12 @@ function createSessionService(env, users, options = {}) {
       if (!token) return null;
       const hash = await digest(token);
       const row = await env.DB.prepare("SELECT user_id,expires_at,revoked_at FROM sessions WHERE token_hash = ?").bind(hash).first();
-      if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now()) return null;
+      if (!row || row.revoked_at) return null;
+      if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) {
+        env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(hash).run().catch(() => {
+        });
+        return null;
+      }
       const user = await users.getByID(row.user_id);
       if (!user || user.disabled) return null;
       const ban = await env.DB.prepare("SELECT 1 AS ok FROM bans WHERE user_id = ? AND (until IS NULL OR until > ?) LIMIT 1").bind(row.user_id, (/* @__PURE__ */ new Date()).toISOString()).first();
@@ -1601,11 +1686,15 @@ async function resolveDnsOverHttps(name, type, doh = "https://cloudflare-dns.com
   const res = await fetch(doh, {
     method: "POST",
     headers: { "Content-Type": "application/dns-message", Accept: "application/dns-message" },
-    body: query
+    body: query,
+    signal: AbortSignal.timeout(5e3)
   });
   if (!res.ok) return [];
   const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.byteLength < 12) return [];
   const dv = new DataView(buf.buffer);
+  const flags = dv.getUint16(2);
+  if (flags & 512) return [];
   const ancount = dv.getUint16(6);
   if (ancount === 0) return [];
   let offset = 12;
@@ -1663,21 +1752,26 @@ function encodeDNSName(name) {
 function parseDNSName(buf, pos) {
   const labels = [];
   let p = pos, jumped = false, endPos = -1;
-  while (p < buf.length) {
+  let jumps = 0;
+  while (p < buf.length && jumps < 10) {
     const len = buf[p];
     if (len === 0) {
       if (!jumped) endPos = p + 1;
       break;
     }
     if ((len & 192) === 192) {
+      if (p + 1 >= buf.length) return ["", pos + 2];
       if (!jumped) endPos = p + 2;
       p = (len & 63) << 8 | buf[p + 1];
       jumped = true;
+      jumps++;
       continue;
     }
+    if (p + 1 + len > buf.length) return ["", pos + 2];
     labels.push(new TextDecoder().decode(buf.slice(p + 1, p + 1 + len)));
     p += len + 1;
   }
+  if (endPos === -1) endPos = p + 1;
   return [labels.join("."), endPos];
 }
 async function resolveDnsOverTcp({ payload, connector, hostname = "8.8.4.4", port = 53 }) {
@@ -1686,6 +1780,14 @@ async function resolveDnsOverTcp({ payload, connector, hostname = "8.8.4.4", por
     throw new AppError("INVALID_DNS_PAYLOAD", 400);
   }
   const socket = connector.connect({ hostname, port });
+  if (socket.opened) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new AppError("DNS_CONNECT_TIMEOUT", 504)), 5e3);
+    });
+    await Promise.race([socket.opened, timeout]);
+    clearTimeout(timer);
+  }
   const writer = socket.writable.getWriter();
   const reader = socket.readable.getReader();
   try {
@@ -1693,7 +1795,13 @@ async function resolveDnsOverTcp({ payload, connector, hostname = "8.8.4.4", por
     frame[0] = query.byteLength >>> 8;
     frame[1] = query.byteLength & 255;
     frame.set(query, 2);
-    await writer.write(frame);
+    let timer;
+    const writePromise = writer.write(frame);
+    const writeTimeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new AppError("DNS_WRITE_TIMEOUT", 504)), 5e3);
+    });
+    await Promise.race([writePromise, writeTimeout]);
+    clearTimeout(timer);
     const response = await readDnsFrame(reader);
     if (!response) throw new AppError("DNS_UPSTREAM_CLOSED", 502);
     return response;
@@ -1720,6 +1828,7 @@ async function readDnsFrame(reader) {
     if (done) return null;
     buffer = concat(buffer, toBytes(value));
     if (expected < 0 && buffer.byteLength >= 2) expected = buffer[0] << 8 | buffer[1];
+    if (expected > 65535) throw new AppError("DNS_FRAME_TOO_LARGE", 400);
     if (expected >= 0 && buffer.byteLength >= expected + 2) return buffer.slice(2, expected + 2);
   }
 }
@@ -1894,7 +2003,7 @@ function parseTypedAddress(bytes, offset, types) {
   if (type === types.domain) {
     if (bytes.byteLength < offset + 2) return { needMore: true };
     const length = bytes[offset + 1];
-    if (length === 0) return { error: "INVALID_ADDRESS" };
+    if (length === 0 || length > 253) return { error: "INVALID_ADDRESS" };
     if (bytes.byteLength < offset + 2 + length) return { needMore: true };
     return { hostname: new TextDecoder().decode(bytes.slice(offset + 2, offset + 2 + length)), offset: offset + 2 + length };
   }
@@ -1926,6 +2035,8 @@ function toBytes2(value) {
 function uuidToBytes(uuid) {
   const hex = String(uuid).replaceAll("-", "");
   if (!/^[0-9a-f]{32}$/i.test(hex)) return null;
+  if (Number.parseInt(hex[12], 16) !== 4) return null;
+  if ((Number.parseInt(hex[16], 16) & 12) !== 8) return null;
   return Uint8Array.from(hex.match(/../g), (pair) => Number.parseInt(pair, 16));
 }
 function equalBytes(a, b) {
@@ -2026,7 +2137,7 @@ function createVlessParser(credentials, limits = {}) {
 var FACTORIES = Object.freeze({ vless: createVlessParser, trojan: createTrojanParser });
 function createProtocolParser(protocol, credentials, limits) {
   const factory = FACTORIES[protocol];
-  if (!factory) throw new TypeError(`unsupported protocol: ${protocol}`);
+  if (!factory) throw new AppError("UNSUPPORTED_PROTOCOL", 501, `unsupported protocol: ${protocol}`);
   return factory(credentials, limits);
 }
 
@@ -2119,14 +2230,16 @@ function toBytes3(value) {
 
 // src/transport-v2/limits.js
 var DEFAULT_TRANSPORT_LIMITS = Object.freeze({
-  maxFrameBytes: 1024 * 1024,
-  maxFirstPacketBytes: 64 * 1024,
-  maxQueuedBytes: 4 * 1024 * 1024
+  maxFrameBytes: 256 * 1024,
+  maxFirstPacketBytes: 16 * 1024,
+  maxQueuedBytes: 512 * 1024,
+  maxQueueSize: 256,
+  maxConnections: 512
 });
 
 // src/transport-v2/grpc-frame.js
 function createGrpcFrameParser(limits = {}) {
-  const maxFrameBytes = Number(limits.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxFrameBytes = Math.max(1, Number(limits.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes));
   let buffer = new Uint8Array();
   return {
     push(value) {
@@ -2206,9 +2319,10 @@ function toBytes4(value) {
 }
 
 // src/transport-v2/grpc.js
+var VALID_GRPC_TYPES = ["application/grpc", "application/grpc+proto"];
 function openGrpcTransport(request, limits) {
   const type = request.headers.get("content-type")?.toLowerCase() || "";
-  if (request.method !== "POST" || !type.startsWith("application/grpc")) {
+  if (request.method !== "POST" || !VALID_GRPC_TYPES.some((t) => type === t || type.startsWith(t + ";"))) {
     throw new AppError("INVALID_GRPC_REQUEST", 400);
   }
   if (!request.body) throw new AppError("GRPC_BODY_REQUIRED", 400);
@@ -2216,17 +2330,24 @@ function openGrpcTransport(request, limits) {
   const source = request.body.getReader();
   const readable = new ReadableStream({
     async pull(controller) {
-      while (true) {
+      let iterations = 0;
+      while (iterations++ < 100) {
         const { done, value } = await source.read();
         if (done) {
           controller.close();
           return;
         }
-        const { messages } = parser.push(value);
-        if (messages.length === 0) continue;
-        for (const message of messages) controller.enqueue(decodeGrpcHunk(message));
-        return;
+        try {
+          const { messages } = parser.push(value);
+          if (messages.length === 0) return;
+          for (const message of messages) controller.enqueue(decodeGrpcHunk(message));
+          return;
+        } catch (err) {
+          controller.error(err);
+          return;
+        }
       }
+      controller.error(new AppError("GRPC_SPIN_LIMIT", 400, "gRPC frame parser exceeded iteration limit"));
     },
     cancel(reason) {
       return source.cancel(reason);
@@ -2238,15 +2359,23 @@ function openGrpcTransport(request, limits) {
   return {
     readable,
     async write(chunk) {
-      if (!closed) await writer.write(encodeGrpcFrame(encodeGrpcHunk(chunk)));
+      if (closed) return;
+      try {
+        await writer.write(encodeGrpcFrame(encodeGrpcHunk(chunk)));
+      } catch {
+        closed = true;
+      }
     },
     async close(reason) {
       if (closed) return;
       closed = true;
-      if (reason) await writer.abort(reason).catch(() => {
-      });
-      else await writer.close().catch(() => {
-      });
+      try {
+        if (reason) await writer.abort(reason).catch(() => {
+        });
+        else await writer.close().catch(() => {
+        });
+      } catch {
+      }
     },
     response: new Response(responseStream.readable, {
       status: 200,
@@ -2262,14 +2391,16 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
     throw new AppError("INVALID_WEBSOCKET_REQUEST", 400);
   }
   const Pair = runtime.WebSocketPair;
-  if (!Pair) throw new AppError("WEBSOCKET_UNAVAILABLE", 501);
+  const Resp = runtime.Response || globalThis.Response;
+  if (!Pair || !Resp) throw new AppError("WEBSOCKET_UNAVAILABLE", 501);
   const pair = new Pair();
   const client = pair[0];
   const server = pair[1];
   server.binaryType = "arraybuffer";
   server.accept();
-  const maxFrameBytes = Number(limits?.maxFrameBytes || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
-  const maxQueuedBytes = Number(limits?.maxQueuedBytes || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const maxFrameBytes = Math.max(1, Number(limits?.maxFrameBytes) || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxQueuedBytes = Math.max(1024, Number(limits?.maxQueuedBytes) || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const maxQueueSize = Math.max(16, Number(limits?.maxQueueSize) || DEFAULT_TRANSPORT_LIMITS.maxQueueSize);
   const queue = [];
   let queuedBytes = 0;
   let controller;
@@ -2282,7 +2413,11 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
       const chunk = queue.shift();
       if (chunk) {
         queuedBytes -= chunk.byteLength;
-        controller.enqueue(chunk);
+        if (queuedBytes < 0) queuedBytes = 0;
+        try {
+          controller.enqueue(chunk);
+        } catch {
+        }
       }
     },
     cancel() {
@@ -2293,6 +2428,7 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
     }
   });
   server.addEventListener("message", async (event) => {
+    if (closed) return;
     if (typeof event.data === "string") {
       controller.error(new AppError("WEBSOCKET_TEXT_UNSUPPORTED", 400));
       try {
@@ -2302,7 +2438,7 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
       return;
     }
     const chunk = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : toBytes5(event.data);
-    if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes) {
+    if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes || queue.length >= maxQueueSize) {
       closed = true;
       try {
         controller.error(new AppError("WEBSOCKET_BUFFER_LIMIT", 413));
@@ -2335,11 +2471,16 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
     }
   });
   const earlyData = readEarlyData(request.headers.get("sec-websocket-protocol"));
-  if (earlyData.bytes.byteLength) controller.enqueue(earlyData.bytes);
+  if (earlyData.bytes.byteLength && controller) controller.enqueue(earlyData.bytes);
   return {
     readable,
     async write(chunk) {
-      if (!closed) server.send(toBytes5(chunk));
+      if (closed) return;
+      try {
+        server.send(toBytes5(chunk));
+      } catch {
+        closed = true;
+      }
     },
     async close(reason) {
       if (closed) return;
@@ -2349,7 +2490,7 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
       } catch {
       }
     },
-    response: new runtime.Response(null, {
+    response: new Resp(null, {
       status: 101,
       webSocket: client,
       headers: earlyData.protocol ? { "sec-websocket-protocol": earlyData.protocol } : void 0
@@ -2358,7 +2499,8 @@ function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
   };
 }
 function readEarlyData(header) {
-  const protocol = String(header || "").split(",")[0].trim();
+  if (!header) return { protocol: "", bytes: new Uint8Array() };
+  const protocol = String(header).split(",")[0].trim();
   if (!protocol.startsWith("ed.")) return { protocol: "", bytes: new Uint8Array() };
   const payload = protocol.slice(3);
   if (!/^[A-Za-z0-9_-]+$/.test(payload)) return { protocol: "", bytes: new Uint8Array() };
@@ -2377,13 +2519,14 @@ function toBytes5(value) {
 }
 
 // src/transport-v2/xhttp.js
+var VALID_XHTTP_TYPES = ["application/x-http"];
 function openXhttpTransport(request) {
   const type = request.headers.get("content-type")?.toLowerCase() || "";
-  if (request.method !== "POST" || !type.startsWith("application/x-http") && !type.startsWith("application/octet-stream")) {
+  if (request.method !== "POST" || !VALID_XHTTP_TYPES.some((t) => type === t || type.startsWith(t + ";"))) {
     throw new AppError("INVALID_XHTTP_REQUEST", 400);
   }
   if (!request.body) throw new AppError("XHTTP_BODY_REQUIRED", 400);
-  if (type.startsWith("application/x-http") && request.headers.get("x-http-mode") && request.headers.get("x-http-mode") !== "stream-one") {
+  if (VALID_XHTTP_TYPES.some((t) => type === t || type.startsWith(t + ";")) && request.headers.get("x-http-mode") && request.headers.get("x-http-mode") !== "stream-one") {
     throw new AppError("XHTTP_MODE_UNSUPPORTED", 400);
   }
   const responseStream = new TransformStream();
@@ -2392,15 +2535,23 @@ function openXhttpTransport(request) {
   return {
     readable: request.body,
     async write(chunk) {
-      if (!closed) await writer.write(chunk);
+      if (closed) return;
+      try {
+        await writer.write(chunk);
+      } catch {
+        closed = true;
+      }
     },
     async close(reason) {
       if (closed) return;
       closed = true;
-      if (reason) await writer.abort(reason).catch(() => {
-      });
-      else await writer.close().catch(() => {
-      });
+      try {
+        if (reason) await writer.abort(reason).catch(() => {
+        });
+        else await writer.close().catch(() => {
+        });
+      } catch {
+      }
     },
     response: new Response(responseStream.readable, {
       headers: { "content-type": "application/octet-stream", "cache-control": "no-store" }
@@ -2413,15 +2564,21 @@ function openXhttpTransport(request) {
 var FACTORIES2 = Object.freeze({ websocket: openWebSocketTransport, grpc: openGrpcTransport, xhttp: openXhttpTransport });
 function openTransport(name, request, limits, runtime) {
   const factory = FACTORIES2[name];
-  if (!factory) throw new TypeError(`unsupported transport: ${name}`);
-  return factory(request, limits, runtime);
+  if (!factory) throw new AppError("UNSUPPORTED_TRANSPORT", 501, `unsupported transport: ${name}`);
+  try {
+    return factory(request, limits, runtime);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError("TRANSPORT_OPEN_FAILED", 500, `failed to open ${name} transport: ${err.message}`);
+  }
 }
 
 // src/usage/meter.js
-function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024, maxBytes = 0 }) {
+function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 1024, resetVersion = 0 }) {
   let pendingUpload = 0;
   let pendingDownload = 0;
   let counted = 0;
+  let budget = 0;
   let flushing = null;
   let needsReschedule = false;
   const schedule = () => {
@@ -2436,11 +2593,20 @@ function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024
       while (pendingUpload !== 0 || pendingDownload !== 0) {
         const upload = pendingUpload;
         const download = pendingDownload;
+        const delta = upload + download;
         pendingUpload = 0;
         pendingDownload = 0;
         try {
-          await repository.increment(userID, upload, download);
-        } catch {
+          const resp = await quotaDO.fetch(`https://do/report`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ delta, resetVersion })
+          });
+          const result = await resp.json().catch(() => ({}));
+          if (!result.allowed) throw new UsageLimitError2();
+          budget = result.budget || budget;
+        } catch (error) {
+          if (error instanceof UsageLimitError2) throw error;
           pendingUpload += upload;
           pendingDownload += download;
           break;
@@ -2457,10 +2623,13 @@ function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024
   };
   const add = (direction, bytes) => {
     const value = validBytes(bytes);
-    if (maxBytes > 0 && counted + value > maxBytes) throw new UsageLimitError2();
     counted += value;
     if (direction === "upload") pendingUpload += value;
     else pendingDownload += value;
+    if (budget > 0 && counted >= budget) {
+      schedule();
+      return;
+    }
     if (pendingUpload + pendingDownload >= flushThreshold) schedule();
   };
   return {
@@ -2470,7 +2639,13 @@ function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024
     addDownload(bytes) {
       add("download", bytes);
     },
-    flush
+    flush,
+    setBudget(b) {
+      budget = b;
+    },
+    getBudget() {
+      return budget;
+    }
   };
 }
 var UsageLimitError2 = class extends Error {
@@ -2485,12 +2660,27 @@ function validBytes(value) {
 }
 
 // src/proxy/pipeline.js
-function startDataFlowPipeline({ request, session, connector, usageRepository, ctx, runtime }) {
+function startDataFlowPipeline({ request, session, connector, quotaDO, ctx, runtime }) {
   const transport = openTransport(session.transport, request, void 0, runtime);
   const remaining = session.quotaBytes > 0 ? Math.max(0, session.quotaBytes - Number(session.usage.total || 0)) : 0;
-  const meter = createUsageMeter({ userID: session.userID, repository: usageRepository, ctx, maxBytes: remaining });
+  if (session.quotaBytes > 0 && remaining <= 0) {
+    transport.close(new AppError("TRAFFIC_QUOTA_EXHAUSTED", 403)).catch(() => {
+    });
+    throw new AppError("TRAFFIC_QUOTA_EXHAUSTED", 403);
+  }
+  const meter = createUsageMeter({
+    userID: session.userID,
+    quotaDO: quotaDO ? quotaDO.get(quotaDO.idFromName(session.userID)) : null,
+    ctx,
+    flushThreshold: 256 * 1024,
+    resetVersion: session.resetVersion
+  });
+  meter.setBudget(session.budget);
   const task = runPipeline({ transport, session, connector, meter }).catch(async (error) => {
-    await transport.close(error);
+    try {
+      await transport.close(error);
+    } catch {
+    }
   }).finally(() => meter.flush());
   ctx?.waitUntil?.(task);
   return transport.response;
@@ -2503,13 +2693,20 @@ async function runPipeline({ transport, session, connector, meter }) {
   const reader = transport.readable.getReader();
   let parsed;
   try {
+    const deadline = Date.now() + 1e4;
     while (!parsed) {
+      if (Date.now() > deadline) throw new AppError("PROTOCOL_HEADER_TIMEOUT", 408);
       const { done, value } = await reader.read();
       if (done) throw new AppError("INCOMPLETE_PROTOCOL_HEADER", 400);
       meter.addUpload(value.byteLength);
       const result = parser.push(value);
       if (result.status === "error") throw new AppError(result.code, 400);
-      if (result.status === "ready") parsed = result.request;
+      if (result.status === "ready") {
+        parsed = result.request;
+      }
+      if (result.status !== "need-more" && result.status !== "ready" && result.status !== "error") {
+        throw new AppError("UNEXPECTED_PARSER_STATUS", 500);
+      }
     }
     if (parsed.isUDP) return forwardDnsDatagrams({ reader, transport, connector, request: parsed, protocol: session.protocol, meter });
     await forwardTcp({ reader, transport, connector, request: parsed, meter });
@@ -2522,12 +2719,14 @@ async function runPipeline({ transport, session, connector, meter }) {
 }
 async function forwardDnsDatagrams({ reader, transport, connector, request, protocol, meter }) {
   const codec = createDatagramCodec(protocol, request);
-  let responseHeaderPending = request.responseHeader;
+  let responseHeaderPending = request.responseHeader || new Uint8Array();
   let chunk = request.payload;
   while (true) {
     for (const datagram of codec.push(chunk)) {
       if (datagram.port !== 53) throw new AppError("UDP_UNSUPPORTED", 400);
-      const payload = await resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+      const dnsPromise = resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError("DNS_TIMEOUT", 504)), 5e3));
+      const payload = await Promise.race([dnsPromise, timeout]);
       const response = codec.encode({ ...datagram, payload });
       if (responseHeaderPending.byteLength) {
         await transport.write(responseHeaderPending);
@@ -2543,7 +2742,10 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
     meter.addUpload(chunk.byteLength);
   }
   codec.finish();
-  await transport.close();
+  try {
+    await transport.close();
+  } catch {
+  }
 }
 async function forwardTcp({ reader, transport, connector, request, meter }) {
   const socket = connector.connect({ hostname: request.hostname, port: request.port });
@@ -2575,7 +2777,7 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
   })();
   const download = (async () => {
     try {
-      if (request.responseHeader.byteLength) {
+      if (request.responseHeader?.byteLength) {
         await transport.write(request.responseHeader);
         meter.addDownload(request.responseHeader.byteLength);
       }
@@ -2589,16 +2791,16 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
       await reader.cancel(error).catch(() => {
       });
       throw error;
-    } finally {
-      await reader.cancel("remote closed").catch(() => {
-      });
     }
   })();
   try {
     const results = await Promise.allSettled([upload, download]);
     const failure = results.find((result) => result.status === "rejected");
     if (failure) throw failure.reason;
-    await transport.close();
+    try {
+      await transport.close();
+    } catch {
+    }
   } finally {
     try {
       remoteWriter.releaseLock();
@@ -2642,6 +2844,159 @@ function matchesTransport(request, transport) {
   return false;
 }
 
+// src/usage/quota-do.js
+var QuotaDO = class {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    try {
+      if (path === "/admit" && request.method === "GET") return await this.handleAdmit();
+      if (path === "/report" && request.method === "POST") return await this.handleReport(request);
+      if (path === "/set-quota" && request.method === "POST") return await this.handleSetQuota(request);
+      if (path === "/reset-uuid" && request.method === "POST") return await this.handleResetUuid();
+      if (path === "/snapshot" && request.method === "GET") return await this.handleSnapshot();
+      return json({ error: "NOT_FOUND" }, 404);
+    } catch (error) {
+      return json({ error: error.code || "INTERNAL_ERROR", message: error.message }, 500);
+    }
+  }
+  // ── 内部:加载/校准 ──────────────────────────────────────────
+  async loadState() {
+    const stored = await this.state.storage.get("quota");
+    if (stored) {
+      await this.maybeRollover(stored);
+      return stored;
+    }
+    const userID = this.state.id.name;
+    let historyUsed = 0;
+    let totalQuota = 0;
+    if (this.env.DB) {
+      const row = await this.env.DB.prepare("SELECT total, quota_bytes FROM usage u JOIN users ON u.user_id = users.user_id WHERE u.user_id = ?").bind(userID).first().catch(() => null);
+      if (row) {
+        historyUsed = Number(row.total || 0);
+        totalQuota = Number(row.quota_bytes || 0);
+      }
+    }
+    const fresh = { totalQuota, historyUsed, todayUsed: 0, resetVersion: 0, lastRollover: todayUTC() };
+    await this.state.storage.put("quota", fresh);
+    return fresh;
+  }
+  async maybeRollover(stored) {
+    const today = todayUTC();
+    if (stored.lastRollover === today) return;
+    const userID = this.state.id.name;
+    const doTotal = stored.historyUsed + stored.todayUsed;
+    let kvTotal = null;
+    let d1Total = null;
+    if (this.env.KV) {
+      const raw = await this.env.KV.get(`usage:${userID}`).catch(() => null);
+      kvTotal = raw !== null ? Number(raw) : null;
+    }
+    if (this.env.DB) {
+      const row = await this.env.DB.prepare("SELECT total FROM usage WHERE user_id = ?").bind(userID).first().catch(() => null);
+      d1Total = row ? Number(row.total || 0) : null;
+    }
+    const kvMismatch = kvTotal !== null && kvTotal !== doTotal;
+    const d1Mismatch = d1Total !== null && d1Total !== doTotal;
+    if (kvMismatch || d1Mismatch) {
+      if (this.env.KV) {
+        await this.env.KV.put(`usage:${userID}`, String(doTotal)).catch(() => {
+        });
+      }
+      if (this.env.DB) {
+        await this.env.DB.prepare("UPDATE usage SET total = ?, updated_at = ? WHERE user_id = ?").bind(doTotal, (/* @__PURE__ */ new Date()).toISOString(), userID).run().catch(() => {
+        });
+      }
+    }
+    stored.historyUsed = doTotal;
+    stored.todayUsed = 0;
+    stored.lastRollover = today;
+    if (this.env.KV) {
+      await this.env.KV.put(`usage:${userID}`, String(stored.historyUsed)).catch(() => {
+      });
+    }
+    if (this.env.DB) {
+      await this.env.DB.prepare("UPDATE usage SET total = ?, updated_at = ? WHERE user_id = ?").bind(stored.historyUsed, (/* @__PURE__ */ new Date()).toISOString(), userID).run().catch(() => {
+      });
+    }
+    await this.state.storage.put("quota", stored);
+  }
+  // ── RPC handlers ────────────────────────────────────────────
+  async handleAdmit() {
+    const s = await this.loadState();
+    const remaining = s.totalQuota > 0 ? Math.max(0, s.totalQuota - s.historyUsed - s.todayUsed) : 0;
+    const allowed = s.totalQuota === 0 || remaining > 0;
+    const budget = s.totalQuota > 0 ? Math.min(remaining, Math.max(remaining * 0.9, 100 * 1024 * 1024)) : 0;
+    return json({ allowed, remaining, budget, resetVersion: s.resetVersion });
+  }
+  async handleReport(request) {
+    const body = await request.json().catch(() => ({}));
+    const delta = Number(body.delta) || 0;
+    const resetVersion = Number(body.resetVersion) || 0;
+    const s = await this.loadState();
+    if (resetVersion !== s.resetVersion) return json({ allowed: false, reason: "UUID_RESET" }, 403);
+    s.todayUsed += delta;
+    await this.state.storage.put("quota", s);
+    await this.syncToKV(s, delta);
+    const remaining = s.totalQuota > 0 ? Math.max(0, s.totalQuota - s.historyUsed - s.todayUsed) : 0;
+    const allowed = s.totalQuota === 0 || remaining > 0;
+    const budget = s.totalQuota > 0 && allowed ? Math.min(remaining, Math.max(remaining * 0.9, 100 * 1024 * 1024)) : 0;
+    return json({ allowed, remaining, budget });
+  }
+  async handleSetQuota(request) {
+    const body = await request.json().catch(() => ({}));
+    const quota = Number(body.quota) || 0;
+    const s = await this.loadState();
+    s.totalQuota = quota;
+    await this.state.storage.put("quota", s);
+    return json({ ok: true, totalQuota: quota });
+  }
+  async handleResetUuid() {
+    const s = await this.loadState();
+    s.resetVersion += 1;
+    await this.state.storage.put("quota", s);
+    return json({ ok: true, resetVersion: s.resetVersion });
+  }
+  async handleSnapshot() {
+    const s = await this.loadState();
+    return json({
+      totalQuota: s.totalQuota,
+      historyUsed: s.historyUsed,
+      todayUsed: s.todayUsed,
+      totalUsed: s.historyUsed + s.todayUsed,
+      remaining: s.totalQuota > 0 ? Math.max(0, s.totalQuota - s.historyUsed - s.todayUsed) : 0,
+      resetVersion: s.resetVersion
+    });
+  }
+  // ── KV 同步(增量,每10秒) ────────────────────────────────────
+  async syncToKV(state, delta) {
+    if (!this.env.KV) return;
+    const now = Date.now();
+    const last = await this.state.storage.get("lastKVSync") || 0;
+    if (now - last < 1e4) return;
+    const userID = this.state.id.name;
+    const totalUsed = state.historyUsed + state.todayUsed;
+    await this.env.KV.put(`usage:${userID}`, String(totalUsed)).catch(() => {
+    });
+    await this.env.KV.put(`usage_delta:${userID}`, String(delta)).catch(() => {
+    });
+    await this.state.storage.put("lastKVSync", now);
+  }
+};
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+function todayUTC() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+
 // src/index.js
 var VERSION = true ? "3.0.0" : "3.0.0";
 var index_default = {
@@ -2680,7 +3035,7 @@ var index_default = {
           request,
           session,
           connector,
-          usageRepository: createUsageRepository(env),
+          quotaDO: env.QUOTA_DO || null,
           ctx,
           runtime: config
         });
@@ -2709,5 +3064,6 @@ function contentType(key) {
   return null;
 }
 export {
+  QuotaDO,
   index_default as default
 };

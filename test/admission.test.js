@@ -46,6 +46,7 @@ function route() {
 }
 
 function createService(options = {}) {
+  const exhausted = (options.total || 0) >= 1024;
   return createAdmissionService({
     users: {
       getByID: async () => ({
@@ -60,5 +61,15 @@ function createService(options = {}) {
     bans: { getActive: async () => options.ban || null },
     usage: { get: async () => ({ total: options.total || 0 }) },
     config: { getRuntime: async () => ({ protocols: options.protocols || ['vless'], transports: options.transports || ['websocket', 'grpc', 'xhttp'] }) },
+    quotaDO: {
+      idFromName: () => 'do-id',
+      get: () => ({
+        fetch: async () => jsonResponse({ allowed: !exhausted, remaining: exhausted ? 0 : 1024 - (options.total || 0), budget: exhausted ? 0 : 100 * 1024 * 1024, resetVersion: 0 }),
+      }),
+    },
   });
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 }

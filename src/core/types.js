@@ -6,7 +6,7 @@ export function createAuthIdentity(user) {
   });
 }
 
-export function createDataFlowSession({ user, protocol, transport, usage, quotaBytes }) {
+export function createDataFlowSession({ user, protocol, transport, usage, quotaBytes, budget = 0, resetVersion = 0 }) {
   return Object.freeze({
     user: Object.freeze({
       userID: user.userID,
@@ -20,6 +20,8 @@ export function createDataFlowSession({ user, protocol, transport, usage, quotaB
     transport,
     usage: Object.freeze(usage || { upload: 0, download: 0, total: 0 }),
     quotaBytes: Number(quotaBytes || 0),
+    budget: Number(budget || 0),
+    resetVersion: Number(resetVersion || 0),
   });
 }
 

@@ -10,7 +10,7 @@ import { normalizeGlobalConfig } from './config/schema.js';
 import { asAppError } from './core/errors.js';
 import { startDataFlowPipeline } from './proxy/pipeline.js';
 import { classifyRequest } from './routes/router.js';
-import { createUsageRepository } from './usage/repository.js';
+import { QuotaDO } from './usage/quota-do.js';
 import { createUserRepository } from './users/repository.js';
 import { jsonResponse, textResponse } from './utils/http.js';
 
@@ -60,7 +60,7 @@ export default {
           request,
           session,
           connector,
-          usageRepository: createUsageRepository(env),
+          quotaDO: env.QUOTA_DO || null,
           ctx,
           runtime: config,
         });
@@ -91,3 +91,5 @@ function contentType(key) {
   if (key.endsWith('.txt')) return 'text/plain; charset=utf-8';
   return null;
 }
+
+export { QuotaDO };

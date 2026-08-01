@@ -15,5 +15,6 @@ export function createAdmissionDependencies(env) {
     },
     usage: createUsageRepository(env),
     config: createRuntimeConfigService(env),
+    quotaDO: env.QUOTA_DO || null,
   };
 }

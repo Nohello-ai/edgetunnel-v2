@@ -16,10 +16,10 @@ import { getCIDRList } from '../net/cidr.js';
 import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName } from '../net/ip-pool.js';
 
 export function createApiRouter({ users, sessions }) {
-  const userService = createUserService(users);
   const governance = createGovernanceService;
   return async function handle(request, env) {
     try {
+      const userService = createUserService(users, env);
       const url = new URL(request.url);
       const auth = createAuthService(users, sessions, createLoginAttemptService(env));
       const current = await auth.resolve(request);
@@ -36,8 +36,8 @@ export function createApiRouter({ users, sessions }) {
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') return jsonResponse({ ok: true }, 200, { 'set-cookie': await auth.logout(request) });
       if (url.pathname === '/api/auth/me' && request.method === 'GET') {
         const u = requireUser(current);
-        const usage = await env.DB?.prepare('SELECT upload,download,total FROM usage WHERE user_id = ?').bind(u.userID).first();
-        return jsonResponse({ ok: true, user: { ...publicUser(u), usage: usage ? { upload: Number(usage.upload), download: Number(usage.download), total: Number(usage.total) } : { upload: 0, download: 0, total: 0 } } });
+        const usage = await fetchUsage(env, u.userID);
+        return jsonResponse({ ok: true, user: { ...publicUser(u), usage } });
       }
       if (url.pathname === '/api/admin/users' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, users: await userService.list() }); }
       if (url.pathname === '/api/admin/users' && request.method === 'POST') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201); }
@@ -56,6 +56,30 @@ export function createApiRouter({ users, sessions }) {
 }
 
 async function readBody(request) { if (!request.headers.get('content-type')?.includes('application/json')) throw new AppError('JSON_REQUIRED', 415); try { return await request.json(); } catch { throw new AppError('INVALID_JSON', 400); } }
+
+// 优先从 DO 拿实时用量(强一致),DO 不可用时降级到 D1(可能滞后数十秒)
+async function fetchUsage(env, userID) {
+  if (env?.QUOTA_DO) {
+    try {
+      const id = env.QUOTA_DO.idFromName(userID);
+      const stub = env.QUOTA_DO.get(id);
+      const resp = await stub.fetch('https://do/snapshot');
+      const s = await resp.json();
+      return {
+        upload: 0,
+        download: 0,
+        total: s.totalUsed || 0,
+        quota: s.totalQuota || 0,
+        remaining: s.remaining || 0,
+        todayUsed: s.todayUsed || 0,
+      };
+    } catch { /* DO 不可用,降级 D1 */ }
+  }
+  const row = await env.DB?.prepare('SELECT upload,download,total FROM usage WHERE user_id = ?').bind(userID).first();
+  return row
+    ? { upload: Number(row.upload), download: Number(row.download), total: Number(row.total) }
+    : { upload: 0, download: 0, total: 0 };
+}
 
 async function buildSubscription(env, user, request) {
   const url = new URL(request.url);

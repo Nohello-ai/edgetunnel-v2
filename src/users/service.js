@@ -3,7 +3,7 @@ import { AppError } from '../core/errors.js';
 import { normalizeUsername } from '../utils/crypto.js';
 import { publicUser } from './repository.js';
 
-export function createUserService(repository) {
+export function createUserService(repository, env) {
   return {
     async create(input) {
       const username = normalizeUsername(input.username);
@@ -22,6 +22,8 @@ export function createUserService(repository) {
         if (/UNIQUE|constraint/i.test(String(error?.message))) throw new AppError('USERNAME_TAKEN', 409, '用户名已存在');
         throw error;
       }
+      // 同步初始配额到 DO(DO 冷启动时会从 D1 兜底,这里主动推送避免首次请求延迟)
+      await syncQuotaToDO(env, user.userID, user.quotaBytes);
       return publicUser(user);
     },
     async update(userID, fields, actor) {
@@ -41,6 +43,10 @@ export function createUserService(repository) {
       const user = await repository.update(userID, allowed);
       if (!user) throw new AppError('USER_NOT_FOUND', 404);
       if ('disabled' in allowed || 'role' in allowed || 'passwordHash' in allowed) await repository.revokeSessions(userID);
+      // 配额变更 → 同步到 DO(续费/调整额度)
+      if ('quotaBytes' in allowed) await syncQuotaToDO(env, userID, allowed.quotaBytes);
+      // 禁用用户 → 递增 resetVersion,活跃连接下次上报时被拒(2-3秒内断干净)
+      if (allowed.disabled === true) await resetUuidInDO(env, userID);
       return publicUser(user);
     },
     async get(userID) { return publicUser(await repository.getByID(userID)); },
@@ -62,3 +68,27 @@ function validQuota(value) {
   return quota;
 }
 function randomToken(bytes) { const data = crypto.getRandomValues(new Uint8Array(bytes)); return [...data].map((v) => v.toString(16).padStart(2, '0')).join(''); }
+
+// ── DO 同步 helpers(非致命:DO 不可用时静默降级,冷启动会从 D1 兜底) ──
+
+async function syncQuotaToDO(env, userID, quota) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch('https://do/set-quota', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ quota }),
+    });
+  } catch { /* DO 不可用,D1 已更新,DO 冷启动时会兜底 */ }
+}
+
+async function resetUuidInDO(env, userID) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch('https://do/reset-uuid', { method: 'POST' });
+  } catch { /* 同上 */ }
+}

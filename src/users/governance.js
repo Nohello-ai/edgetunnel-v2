@@ -8,6 +8,8 @@ export function createGovernanceService(env) {
       const createdAt = new Date().toISOString();
       await env.DB.prepare(`INSERT INTO bans (user_id,reason,until,created_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason,until=excluded.until,created_at=excluded.created_at`)
         .bind(userID, reason, until, createdAt).run();
+      // 递增 resetVersion → 活跃连接下次上报时被拒(2-3秒内断干净)
+      await resetUuidInDO(env, userID);
       return { userID, reason, until, createdAt };
     },
     async unban(userID) {
@@ -26,6 +28,16 @@ function parseUntil(value) {
   maxDate.setFullYear(maxDate.getFullYear() + 10);
   if (timestamp > maxDate.getTime()) throw new AppError('BAN_UNTIL_TOO_FAR', 400, '封禁截止时间不能超过 10 年');
   return new Date(timestamp).toISOString();
+}
+
+// 封禁时递增 DO resetVersion,活跃连接下次上报被拒(非致命:admission 层也会拦新连接)
+async function resetUuidInDO(env, userID) {
+  if (!env?.QUOTA_DO) return;
+  try {
+    const id = env.QUOTA_DO.idFromName(userID);
+    const stub = env.QUOTA_DO.get(id);
+    await stub.fetch('https://do/reset-uuid', { method: 'POST' });
+  } catch { /* DO 不可用,admission 层的 ban 检查仍生效 */ }
 }
 
 export function validateBanTarget(user) {

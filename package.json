@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build-single.mjs",
+    "build:transmission": "node scripts/build-single.mjs transmission",
+    "build:admin": "node scripts/build-single.mjs admin",
     "bundle": "node scripts/build-single.mjs",
     "check": "find src test scripts -type f -name '*.js' -exec node --check {} +",
     "test": "node --test test/*.test.js"

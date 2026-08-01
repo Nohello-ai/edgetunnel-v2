@@ -1,3 +1,6 @@
 node_modules/
 .wrangler/
 *.log
+_worker.js
+_worker-transmission.js
+_worker-admin.js

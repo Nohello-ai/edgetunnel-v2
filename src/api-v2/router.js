@@ -11,6 +11,9 @@ import { publicUser } from '../users/repository.js';
 import { createUserService } from '../users/service.js';
 import { createGovernanceService, validateBanTarget } from '../users/governance.js';
 import { jsonResponse, textResponse } from '../utils/http.js';
+import { identifyOperator } from '../net/operator.js';
+import { getCIDRList } from '../net/cidr.js';
+import { generateIPs, pickPort, resolveIPSource } from '../net/ip-pool.js';
 
 export function createApiRouter({ users, sessions }) {
   const userService = createUserService(users);
@@ -37,7 +40,7 @@ export function createApiRouter({ users, sessions }) {
       if (banMatch && request.method === 'DELETE') { requireAdmin(current); await governance(env).unban(banMatch[1]); return jsonResponse({ ok: true }); }
       if (url.pathname === '/api/admin/config' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
       if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const config = normalizeGlobalConfig(await readBody(request), await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
-      if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), url));
+      if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError('NOT_FOUND', 404);
     } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status); }
   };
@@ -45,7 +48,8 @@ export function createApiRouter({ users, sessions }) {
 
 async function readBody(request) { if (!request.headers.get('content-type')?.includes('application/json')) throw new AppError('JSON_REQUIRED', 415); try { return await request.json(); } catch { throw new AppError('INVALID_JSON', 400); } }
 
-async function buildSubscription(env, user, url) {
+async function buildSubscription(env, user, request) {
+  const url = new URL(request.url);
   const config = normalizeGlobalConfig(await getGlobalConfig(env));
   const protocols = config.protocols.map((protocol) => protocol === 'vless' ? { protocol, uuid: user.userID } : { protocol, password: user.trojanSecret });
   const transports = config.transports.map((transport) => ({
@@ -61,8 +65,33 @@ async function buildSubscription(env, user, url) {
     return { ...node, path: params.path, query: params.query };
   });
   if (config.ECH) nodes = nodes.map((node) => withECH(node, { enabled: true, ...config.ECHConfig }));
+
+  const optIP = config.节点参数?.优选IP;
+  if (optIP?.启用) {
+    const ips = await resolveOptimizedIPs(optIP, request);
+    if (ips && ips.length > 0) {
+      nodes = nodes.map((node) => {
+        const ip = ips[Math.floor(Math.random() * ips.length)];
+        return { ...node, address: ip.split(':')[0], port: Number(ip.split(':')[1]) };
+      });
+    }
+  }
+
   return generateSubscription(nodes);
 }
+
+async function resolveOptimizedIPs(optIP, request) {
+  if (optIP.自定义IP源) {
+    const ips = await resolveIPSource(optIP.自定义IP源);
+    if (ips) return ips;
+  }
+
+  const operator = identifyOperator(request.cf);
+  const cidrs = await getCIDRList(operator);
+  if (!cidrs || cidrs.length === 0) return null;
+
+  const ports = optIP.随机端口 ? undefined : [443];
+  return generateIPs(cidrs, 16, { ports });
 
 function randomPathSegment() {
   const bytes = crypto.getRandomValues(new Uint8Array(6));

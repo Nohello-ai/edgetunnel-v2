@@ -98,6 +98,16 @@ function normalizeNodeGroup(value) {
     随机路径: Boolean(config.随机路径 ?? false),
     启用0RTT: Boolean(config.启用0RTT ?? false),
     TLS分片: normalizeTlsFragment(config.TLS分片),
+    优选IP: normalizeOptimizedIP(config.优选IP),
+  };
+}
+
+function normalizeOptimizedIP(value) {
+  const config = normalizeObject(value);
+  return {
+    启用: Boolean(config.启用 ?? false),
+    随机端口: Boolean(config.随机端口 ?? true),
+    自定义IP源: String(config.自定义IP源 || '').trim(),
   };
 }
 

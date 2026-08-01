@@ -9,8 +9,17 @@ var AppError = class extends Error {
     this.details = details;
   }
 };
+var UsageLimitError = class extends Error {
+  constructor(message = "TRAFFIC_QUOTA_EXHAUSTED") {
+    super(message);
+    this.name = "UsageLimitError";
+    this.code = "TRAFFIC_QUOTA_EXHAUSTED";
+    this.status = 403;
+  }
+};
 function asAppError(error) {
   if (error instanceof AppError) return error;
+  if (error instanceof UsageLimitError) return error;
   return new AppError("INTERNAL_ERROR", 500, "internal error");
 }
 
@@ -1082,7 +1091,6 @@ function parseCIDRText(text) {
 }
 async function useFallback(key, entry) {
   if (entry) {
-    cache.set(key, { cidrs: entry.cidrs, timestamp: Date.now() });
     return entry.cidrs;
   }
   return [...FALLBACK_CIDRS];
@@ -1385,33 +1393,7 @@ async function validateProxyConfig(body, request) {
   const socks = proxy.SOCKS5;
   if (proxy.\u6A21\u5F0F === "socks5" && socks?.\u5168\u5C40) {
     if (!socks.\u8D26\u53F7) throw new AppError("PROXY_CONFIG_INVALID", 400, "\u5168\u5C40\u4EE3\u7406\u6A21\u5F0F\u5FC5\u987B\u586B\u5199\u4EE3\u7406\u8D26\u53F7");
-    const connect2 = request.fetcher?.connect?.bind(request.fetcher);
-    if (!connect2) throw new AppError("PROXY_TEST_FAILED", 400, "\u65E0\u6CD5\u83B7\u53D6\u7F51\u7EDC\u8FDE\u63A5");
-    const addr = typeof socks.\u8D26\u53F7 === "object" ? socks.\u8D26\u53F7 : parseProxyAccount(socks.\u8D26\u53F7);
-    if (!addr?.hostname) throw new AppError("PROXY_CONFIG_INVALID", 400, "\u4EE3\u7406\u8D26\u53F7\u683C\u5F0F\u65E0\u6548");
-    try {
-      const socket = connect2({ hostname: addr.hostname, port: addr.port || 1080 });
-      if (socket.opened) {
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5e3));
-        await Promise.race([socket.opened, timeout]);
-      }
-      socket.close().catch(() => {
-      });
-    } catch (err) {
-      throw new AppError("PROXY_UNREACHABLE", 400, `\u4EE3\u7406\u670D\u52A1\u5668\u65E0\u6CD5\u8FDE\u63A5: ${err.message}`);
-    }
   }
-}
-function parseProxyAccount(value) {
-  const text = String(value || "").trim();
-  const atIndex = text.lastIndexOf("@");
-  if (atIndex !== -1) {
-    const hostPart = text.slice(atIndex + 1);
-    const [hostname2, port2] = hostPart.split(":");
-    return { hostname: hostname2, port: port2 ? parseInt(port2, 10) : 1080 };
-  }
-  const [hostname, port] = text.split(":");
-  return { hostname, port: port ? parseInt(port, 10) : 1080 };
 }
 
 // src/auth/bootstrap.js
@@ -1802,50 +1784,78 @@ async function proxyIPConnect(tcpConnect, target, proxyIP, options = {}) {
   if (candidates.length === 0) throw new Error("No proxy IP candidates");
   const shuffled = [...candidates].sort(() => Math.random() - 0.5).slice(0, 8);
   const errors = [];
-  for (const candidate of shuffled) {
-    try {
-      const socket = tcpConnect({ hostname: candidate.hostname, port: candidate.port });
-      if (socket.opened) await socket.opened;
-      return socket;
-    } catch (err) {
-      errors.push(err);
-    }
+  const results = await Promise.allSettled(
+    shuffled.map(
+      (candidate) => (async () => {
+        const socket = tcpConnect.connect({ hostname: candidate.hostname, port: candidate.port });
+        if (socket.opened) await socket.opened;
+        return socket;
+      })()
+    )
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled") return r.value;
+    errors.push(r.reason?.message || "failed");
   }
-  throw new Error(`All proxy IPs failed: ${errors.map((e) => e.message).join(", ")}`);
+  throw new Error(`All proxy IPs failed: ${errors.join(", ")}`);
 }
 
 // src/connector/chain.js
 function createFallbackConnector(directConnect, proxyConfig) {
   const mode = proxyConfig?.\u6A21\u5F0F;
-  return async function connect2(target) {
-    if (mode === "auto") {
-      if (isCloudflareIP(target.hostname)) return proxyConnect(directConnect, target, proxyConfig);
-      const socket = directConnect(target);
-      if (socket.opened) await socket.opened;
-      return socket;
-    }
-    if (mode === "socks5" && proxyConfig?.SOCKS5?.\u5168\u5C40) {
-      return proxyConnect(directConnect, target, proxyConfig);
-    }
-    try {
-      const socket = directConnect(target);
-      if (socket.opened) {
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("DIRECT_TIMEOUT")), 5e3));
-        await Promise.race([socket.opened, timeout]);
+  return {
+    connect: async function connect2(target) {
+      if (mode === "auto") {
+        if (isCloudflareIP(target.hostname)) return proxyConnect(directConnect, target, proxyConfig);
+        const socket = directConnect.connect(target);
+        if (socket.opened) await socket.opened;
+        return socket;
       }
-      return socket;
-    } catch {
-      return proxyConnect(directConnect, target, proxyConfig);
+      if (mode === "socks5" && proxyConfig?.SOCKS5?.\u5168\u5C40) {
+        return proxyConnect(directConnect, target, proxyConfig);
+      }
+      try {
+        const socket = directConnect.connect(target);
+        if (socket.opened) {
+          let timer;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("DIRECT_TIMEOUT")), 5e3);
+          });
+          await Promise.race([socket.opened, timeout]);
+          clearTimeout(timer);
+        }
+        return socket;
+      } catch {
+        return proxyConnect(directConnect, target, proxyConfig);
+      }
     }
   };
+}
+function parseAccount(text) {
+  if (!text) return {};
+  let username = "", password = "";
+  const atIdx = text.lastIndexOf("@");
+  if (atIdx !== -1) {
+    const userPart = text.slice(0, atIdx);
+    text = text.slice(atIdx + 1);
+    const sep = userPart.indexOf(":");
+    if (sep !== -1) {
+      username = userPart.slice(0, sep);
+      password = userPart.slice(sep + 1);
+    } else {
+      username = userPart;
+    }
+  }
+  const [hostname, port] = text.split(":");
+  return { hostname, port: port ? parseInt(port) : 1080, username, password };
 }
 async function proxyConnect(directConnect, target, proxyConfig) {
   const errors = [];
   const socksConfig = proxyConfig?.SOCKS5;
   if (socksConfig?.\u542F\u7528) {
     try {
-      const addr = typeof socksConfig.\u8D26\u53F7 === "object" ? socksConfig.\u8D26\u53F7 : {};
-      const socket = directConnect({ hostname: addr.hostname || "127.0.0.1", port: addr.port || 1080 });
+      const addr = parseAccount(socksConfig.\u8D26\u53F7);
+      const socket = directConnect.connect({ hostname: addr.hostname || "127.0.0.1", port: addr.port || 1080 });
       if (socket.opened) await socket.opened;
       const type = socksConfig.\u542F\u7528;
       if (type === "socks5") await socks5Connect(socket, target, addr);
@@ -1937,7 +1947,10 @@ function protocolError(code) {
 // src/protocol-v2/trojan.js
 var encoder2 = new TextEncoder();
 function createTrojanParser(credentials, limits = {}) {
-  const expected = encoder2.encode(sha224Text(credentials?.secret || credentials?.trojanSecret || ""));
+  if (!credentials?.secret && !credentials?.trojanSecret) {
+    return { push: () => ({ status: "error", code: "INVALID_CREDENTIALS" }) };
+  }
+  const expected = encoder2.encode(sha224Text(credentials?.secret || credentials?.trojanSecret));
   const maxBytes = Number(limits.maxFirstPacketBytes || 64 * 1024);
   let buffer = new Uint8Array();
   let finished = false;
@@ -1966,7 +1979,8 @@ function createTrojanParser(credentials, limits = {}) {
         hostname: address.hostname,
         port,
         isUDP: command === 3,
-        payload
+        payload,
+        responseHeader: new Uint8Array(0)
       }), payload);
     }
   };
@@ -2443,7 +2457,7 @@ function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024
   };
   const add = (direction, bytes) => {
     const value = validBytes(bytes);
-    if (maxBytes > 0 && counted + value > maxBytes) throw new UsageLimitError();
+    if (maxBytes > 0 && counted + value > maxBytes) throw new UsageLimitError2();
     counted += value;
     if (direction === "upload") pendingUpload += value;
     else pendingDownload += value;
@@ -2459,7 +2473,7 @@ function createUsageMeter({ userID, repository, ctx, flushThreshold = 256 * 1024
     flush
   };
 }
-var UsageLimitError = class extends Error {
+var UsageLimitError2 = class extends Error {
   constructor() {
     super("TRAFFIC_QUOTA_EXHAUSTED");
     this.code = "TRAFFIC_QUOTA_EXHAUSTED";
@@ -2534,8 +2548,12 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
 async function forwardTcp({ reader, transport, connector, request, meter }) {
   const socket = connector.connect({ hostname: request.hostname, port: request.port });
   if (socket.opened) {
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError("TCP_CONNECT_TIMEOUT", 408)), 5e3));
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new AppError("TCP_CONNECT_TIMEOUT", 408)), 5e3);
+    });
     await Promise.race([socket.opened, timeout]);
+    clearTimeout(timer);
   }
   const remoteWriter = socket.writable.getWriter();
   const remoteReader = socket.readable.getReader();
@@ -2633,7 +2651,8 @@ var index_default = {
       if (env.ADMIN_BUCKET) {
         const url = new URL(request.url);
         const path = url.pathname === "/" ? "/index.html" : url.pathname;
-        if (!path.startsWith("/api/")) {
+        const apiPaths = ["/api/", "/logout", "/sub", "/version"];
+        if (!apiPaths.some((p) => path.startsWith(p))) {
           const key = path.replace(/^\//, "");
           const obj = await env.ADMIN_BUCKET.get(key).catch(() => null);
           if (obj) {

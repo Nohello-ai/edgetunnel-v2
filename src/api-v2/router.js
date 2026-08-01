@@ -169,35 +169,7 @@ async function validateProxyConfig(body, request) {
   const socks = proxy.SOCKS5;
   if (proxy.模式 === 'socks5' && socks?.全局) {
     if (!socks.账号) throw new AppError('PROXY_CONFIG_INVALID', 400, '全局代理模式必须填写代理账号');
-
-    // 尝试连接代理服务器验证可用性
-    const connect = request.fetcher?.connect?.bind(request.fetcher);
-    if (!connect) throw new AppError('PROXY_TEST_FAILED', 400, '无法获取网络连接');
-
-    const addr = typeof socks.账号 === 'object' ? socks.账号 : parseProxyAccount(socks.账号);
-    if (!addr?.hostname) throw new AppError('PROXY_CONFIG_INVALID', 400, '代理账号格式无效');
-
-    try {
-      const socket = connect({ hostname: addr.hostname, port: addr.port || 1080 });
-      if (socket.opened) {
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
-        await Promise.race([socket.opened, timeout]);
-      }
-      socket.close().catch(() => {});
-    } catch (err) {
-      throw new AppError('PROXY_UNREACHABLE', 400, `代理服务器无法连接: ${err.message}`);
-    }
   }
 }
 
-function parseProxyAccount(value) {
-  const text = String(value || '').trim();
-  const atIndex = text.lastIndexOf('@');
-  if (atIndex !== -1) {
-    const hostPart = text.slice(atIndex + 1);
-    const [hostname, port] = hostPart.split(':');
-    return { hostname, port: port ? parseInt(port, 10) : 1080 };
-  }
-  const [hostname, port] = text.split(':');
-  return { hostname, port: port ? parseInt(port, 10) : 1080 };
-}
+

@@ -67,7 +67,7 @@ function parseCIDRText(text) {
 
 async function useFallback(key, entry) {
   if (entry) {
-    cache.set(key, { cidrs: entry.cidrs, timestamp: Date.now() });
+    // 不更新时间戳，保持原有过期时间，给下次 fetch 留机会
     return entry.cidrs;
   }
   return [...FALLBACK_CIDRS];

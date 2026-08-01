@@ -25,7 +25,8 @@ export default {
       if (env.ADMIN_BUCKET) {
         const url = new URL(request.url);
         const path = url.pathname === '/' ? '/index.html' : url.pathname;
-        if (!path.startsWith('/api/')) {
+        const apiPaths = ['/api/', '/logout', '/sub', '/version'];
+        if (!apiPaths.some(p => path.startsWith(p))) {
           const key = path.replace(/^\//, '');
           const obj = await env.ADMIN_BUCKET.get(key).catch(() => null);
           if (obj) {

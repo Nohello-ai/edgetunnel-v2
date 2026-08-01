@@ -93,17 +93,21 @@ export async function proxyIPConnect(tcpConnect, target, proxyIP, options = {}) 
   // 洗牌后取前 8 个
   const shuffled = [...candidates].sort(() => Math.random() - 0.5).slice(0, 8);
 
-  // 并发连接，取最快的一个
+  // 并发连接所有候选，取最快的一个
   const errors = [];
-  for (const candidate of shuffled) {
-    try {
-      const socket = tcpConnect({ hostname: candidate.hostname, port: candidate.port });
-      if (socket.opened) await socket.opened;
-      return socket;
-    } catch (err) {
-      errors.push(err);
-    }
+  const results = await Promise.allSettled(
+    shuffled.map(candidate =>
+      (async () => {
+        const socket = tcpConnect.connect({ hostname: candidate.hostname, port: candidate.port });
+        if (socket.opened) await socket.opened;
+        return socket;
+      })()
+    )
+  );
+  for (const r of results) {
+    if (r.status === 'fulfilled') return r.value;
+    errors.push(r.reason?.message || 'failed');
   }
 
-  throw new Error(`All proxy IPs failed: ${errors.map(e => e.message).join(', ')}`);
+  throw new Error(`All proxy IPs failed: ${errors.join(', ')}`);
 }

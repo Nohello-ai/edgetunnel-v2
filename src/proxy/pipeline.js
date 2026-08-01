@@ -73,8 +73,10 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
 
   // 建连超时 5 秒
   if (socket.opened) {
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError('TCP_CONNECT_TIMEOUT', 408)), 5000));
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new AppError('TCP_CONNECT_TIMEOUT', 408)), 5000); });
     await Promise.race([socket.opened, timeout]);
+    clearTimeout(timer);
   }
   const remoteWriter = socket.writable.getWriter();
   const remoteReader = socket.readable.getReader();

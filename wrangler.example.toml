@@ -11,6 +11,10 @@ database_id = "replace-with-your-database-id"
 binding = "KV"
 id = "replace-with-your-kv-id"
 
+[[r2_buckets]]
+binding = "ADMIN_BUCKET"
+bucket_name = "edgetunnel-admin"
+
 # Set bootstrap credentials as encrypted secrets for the first request, then remove them:
 # wrangler secret put BOOTSTRAP_ADMIN_USER
 # wrangler secret put BOOTSTRAP_ADMIN_PASSWORD

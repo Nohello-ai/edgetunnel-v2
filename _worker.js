@@ -1228,8 +1228,17 @@ function createApiRouter({ users, sessions }) {
         const result = await auth.login(body.username, body.password, loginFingerprint(request, body.username));
         return jsonResponse({ ok: true, user: publicUser(result.user) }, 200, { "set-cookie": result.session.cookie });
       }
+      if (url.pathname === "/api/auth/register" && request.method === "POST") {
+        const body = await readBody(request);
+        const user = await userService.create({ ...body, role: "user" });
+        return jsonResponse({ ok: true, user: publicUser(user) }, 201);
+      }
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return jsonResponse({ ok: true }, 200, { "set-cookie": await auth.logout(request) });
-      if (url.pathname === "/api/auth/me" && request.method === "GET") return jsonResponse({ ok: true, user: publicUser(requireUser(current)) });
+      if (url.pathname === "/api/auth/me" && request.method === "GET") {
+        const u = requireUser(current);
+        const usage = await env.DB?.prepare("SELECT upload,download,total FROM usage WHERE user_id = ?").bind(u.userID).first();
+        return jsonResponse({ ok: true, user: { ...publicUser(u), usage: usage ? { upload: Number(usage.upload), download: Number(usage.download), total: Number(usage.total) } : { upload: 0, download: 0, total: 0 } } });
+      }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         requireAdmin(current);
         return jsonResponse({ ok: true, users: await userService.list() });
@@ -2589,7 +2598,7 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
 }
 
 // src/routes/router.js
-var CONTROL_PATHS = ["/login", "/logout", "/admin", "/sub"];
+var CONTROL_PATHS = ["/logout", "/sub"];
 function classifyRequest(request) {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/") || CONTROL_PATHS.includes(url.pathname)) {
@@ -2605,12 +2614,12 @@ function classifyRequest(request) {
   return { kind: "status", url };
 }
 function matchesTransport(request, transport) {
-  const contentType = request.headers.get("content-type")?.toLowerCase() || "";
+  const contentType2 = request.headers.get("content-type")?.toLowerCase() || "";
   const upgrade = request.headers.get("upgrade")?.toLowerCase() || "";
   if (transport === "websocket") return request.method === "GET" && upgrade === "websocket";
-  if (transport === "grpc") return request.method === "POST" && contentType.startsWith("application/grpc");
+  if (transport === "grpc") return request.method === "POST" && contentType2.startsWith("application/grpc");
   if (transport === "xhttp") {
-    return request.method === "POST" && (contentType.startsWith("application/x-http") || contentType.startsWith("application/octet-stream"));
+    return request.method === "POST" && (contentType2.startsWith("application/x-http") || contentType2.startsWith("application/octet-stream"));
   }
   return false;
 }
@@ -2621,6 +2630,20 @@ var index_default = {
   async fetch(request, env, ctx) {
     if (!env?.DB) return jsonResponse({ ok: false, error: "DB_BINDING_REQUIRED" }, 500);
     try {
+      if (env.ADMIN_BUCKET) {
+        const url = new URL(request.url);
+        const path = url.pathname === "/" ? "/index.html" : url.pathname;
+        if (!path.startsWith("/api/")) {
+          const key = path.replace(/^\//, "");
+          const obj = await env.ADMIN_BUCKET.get(key).catch(() => null);
+          if (obj) {
+            const headers = new Headers();
+            headers.set("content-type", contentType(key) || "application/octet-stream");
+            headers.set("cache-control", "public, max-age=3600");
+            return new Response(obj.body, { headers });
+          }
+        }
+      }
       const users = createUserRepository(env);
       const route = classifyRequest(request);
       if (route.kind === "api") {
@@ -2653,6 +2676,19 @@ var index_default = {
     }
   }
 };
+function contentType(key) {
+  if (key.endsWith(".html")) return "text/html; charset=utf-8";
+  if (key.endsWith(".js")) return "application/javascript";
+  if (key.endsWith(".css")) return "text/css";
+  if (key.endsWith(".json")) return "application/json";
+  if (key.endsWith(".png")) return "image/png";
+  if (key.endsWith(".jpg") || key.endsWith(".jpeg")) return "image/jpeg";
+  if (key.endsWith(".svg")) return "image/svg+xml";
+  if (key.endsWith(".ico")) return "image/x-icon";
+  if (key.endsWith(".woff2")) return "font/woff2";
+  if (key.endsWith(".txt")) return "text/plain; charset=utf-8";
+  return null;
+}
 export {
   index_default as default
 };

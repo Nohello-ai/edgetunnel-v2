@@ -1,6 +1,6 @@
 import { parseDataFlowRoute } from '../admission/service.js';
 
-const CONTROL_PATHS = ['/login', '/logout', '/admin', '/sub'];
+const CONTROL_PATHS = ['/logout', '/sub'];
 
 export function classifyRequest(request) {
   const url = new URL(request.url);

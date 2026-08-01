@@ -21,6 +21,22 @@ export default {
     if (!env?.DB) return jsonResponse({ ok: false, error: 'DB_BINDING_REQUIRED' }, 500);
 
     try {
+      // 从 R2 提供静态文件（管理面板）
+      if (env.ADMIN_BUCKET) {
+        const url = new URL(request.url);
+        const path = url.pathname === '/' ? '/index.html' : url.pathname;
+        if (!path.startsWith('/api/')) {
+          const key = path.replace(/^\//, '');
+          const obj = await env.ADMIN_BUCKET.get(key).catch(() => null);
+          if (obj) {
+            const headers = new Headers();
+            headers.set('content-type', contentType(key) || 'application/octet-stream');
+            headers.set('cache-control', 'public, max-age=3600');
+            return new Response(obj.body, { headers });
+          }
+        }
+      }
+
       const users = createUserRepository(env);
       const route = classifyRequest(request);
 
@@ -60,3 +76,17 @@ export default {
     }
   },
 };
+
+function contentType(key) {
+  if (key.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (key.endsWith('.js')) return 'application/javascript';
+  if (key.endsWith('.css')) return 'text/css';
+  if (key.endsWith('.json')) return 'application/json';
+  if (key.endsWith('.png')) return 'image/png';
+  if (key.endsWith('.jpg') || key.endsWith('.jpeg')) return 'image/jpeg';
+  if (key.endsWith('.svg')) return 'image/svg+xml';
+  if (key.endsWith('.ico')) return 'image/x-icon';
+  if (key.endsWith('.woff2')) return 'font/woff2';
+  if (key.endsWith('.txt')) return 'text/plain; charset=utf-8';
+  return null;
+}

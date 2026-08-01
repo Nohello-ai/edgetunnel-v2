@@ -42,7 +42,7 @@ export function generateIPs(cidrs, count, options = {}) {
 }
 
 /**
- * 解析自定义 IP 源文本，返回 IP:port 数组。
+ * 解析自定义 IP 源文本，返回 IP 条目数组。
  *
  * 支持格式（每行一个）：
  *   IP:port#名称
@@ -52,66 +52,52 @@ export function generateIPs(cidrs, count, options = {}) {
  *   空行和 # 开头的注释行会被忽略
  *
  * 端口规则：
- *   如果行内指定了端口 → 使用该端口
- *   如果行内没指定端口 → 使用 defaultPort
+ *   行内指定了端口 → 使用该端口
+ *   行内没指定端口 → port 为 null，由调用方按随机端口开关决定
  *
  * @param {string} text - 自定义 IP 文本
- * @param {object} [options]
- * @param {number} [options.defaultPort] - 默认端口，默认 443
- * @returns {Array<{ address: string, port: number, name?: string }> | null}
+ * @returns {Array<{ address: string, port: number|null, name?: string }> | null}
  */
-export function parseCustomIPs(text, options = {}) {
+export function parseCustomIPs(text) {
   if (!text) return null;
-  const defaultPort = options.defaultPort ?? 443;
   const results = [];
 
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
 
-    // 提取 #名称
     const hashIndex = trimmed.indexOf('#');
     const namePart = hashIndex !== -1 ? trimmed.slice(hashIndex + 1).trim() : '';
     const ipPart = hashIndex !== -1 ? trimmed.slice(0, hashIndex).trim() : trimmed;
 
     if (!ipPart) continue;
 
-    // 提取 IP 和端口
-    const entry = parseIPEntry(ipPart, defaultPort);
+    const entry = parseIPEntry(ipPart);
     if (!entry) continue;
 
-    if (namePart) {
-      results.push({ ...entry, name: namePart });
-    } else {
-      results.push(entry);
-    }
+    if (namePart) results.push({ ...entry, name: namePart });
+    else results.push(entry);
   }
 
   return results.length ? results : null;
 }
 
 /**
- * 解析单行 IP:port。
- *
- * @param {string} text - "IP:port" 或 "IP"
- * @param {number} defaultPort
- * @returns {{ address: string, port: number } | null}
+ * 解析单行 IP:port 或 IP。
+ * 有端口 → port 为数字，无端口 → port 为 null。
  */
-function parseIPEntry(text, defaultPort) {
+function parseIPEntry(text) {
   if (!text) return null;
-
-  // IPv4:port
-  const ipv4Match = text.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d{1,5}))?$/);
-  if (ipv4Match) {
-    const octets = ipv4Match[1].split('.').map(Number);
-    if (octets.some((o) => o < 0 || o > 255)) return null;
-    const port = ipv4Match[2] ? parseInt(ipv4Match[2], 10) : defaultPort;
+  const m = text.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d{1,5}))?$/);
+  if (!m) return null;
+  const octets = m[1].split('.').map(Number);
+  if (octets.some((o) => o < 0 || o > 255)) return null;
+  if (m[2]) {
+    const port = parseInt(m[2], 10);
     if (port < 1 || port > 65535) return null;
-    return { address: ipv4Match[1], port };
+    return { address: m[1], port };
   }
-
-  // IPv6 暂不支持
-  return null;
+  return { address: m[1], port: null };
 }
 
 /**
@@ -120,8 +106,7 @@ function parseIPEntry(text, defaultPort) {
  * @param {string} url
  * @param {object} [options]
  * @param {typeof fetch} [options.fetch]
- * @param {number} [options.defaultPort]
- * @returns {Promise<Array<{ address: string, port: number, name?: string }> | null>}
+ * @returns {Promise<Array<{ address: string, port: number|null, name?: string }> | null>}
  */
 export async function fetchCustomIPs(url, options = {}) {
   const fetcher = options.fetch || globalThis.fetch;
@@ -133,7 +118,19 @@ export async function fetchCustomIPs(url, options = {}) {
   } catch {
     return null;
   }
-  return parseCustomIPs(text, options);
+  return parseCustomIPs(text);
+}
+
+/**
+ * 根据随机端口开关返回一个端口。
+ * true → 从 CF 端口池随机选，false → 443。
+ *
+ * @param {boolean} useRandomPort
+ * @returns {number}
+ */
+export function pickPort(useRandomPort) {
+  if (useRandomPort) return CF_PORTS[Math.floor(Math.random() * CF_PORTS.length)];
+  return 443;
 }
 
 /**

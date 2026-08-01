@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateIPs, parseCIDR, parseCustomIPs, fetchCustomIPs, generateNodeName } from '../src/net/ip-pool.js';
+import { generateIPs, parseCIDR, parseCustomIPs, fetchCustomIPs, generateNodeName, pickPort } from '../src/net/ip-pool.js';
 
 const SAMPLE_CIDRS = ['104.16.0.0/13', '172.64.0.0/13'];
 
@@ -58,13 +58,18 @@ test('parseCustomIPs parses IP:port#name', () => {
 });
 
 test('parseCustomIPs parses IP#name with default port', () => {
-  const result = parseCustomIPs('104.16.0.1#测试', { defaultPort: 443 });
-  assert.deepEqual(result, [{ address: '104.16.0.1', port: 443, name: '测试' }]);
+  const result = parseCustomIPs('104.16.0.1#测试');
+  assert.deepEqual(result, [{ address: '104.16.0.1', port: null, name: '测试' }]);
 });
 
 test('parseCustomIPs parses IP:port without name', () => {
   const result = parseCustomIPs('104.16.0.1:8443');
   assert.deepEqual(result, [{ address: '104.16.0.1', port: 8443 }]);
+});
+
+test('parseCustomIPs parses IP without port or name', () => {
+  const result = parseCustomIPs('104.16.0.1');
+  assert.deepEqual(result, [{ address: '104.16.0.1', port: null }]);
 });
 
 test('parseCustomIPs parses multiple lines', () => {
@@ -110,4 +115,13 @@ test('generateNodeName auto-generates with operator label', () => {
 test('generateNodeName handles unknown operator', () => {
   const name = generateNodeName(undefined, 'unknown', 5);
   assert.ok(name.includes('国际'));
+});
+
+test('pickPort returns 443 when randomPort is false', () => {
+  assert.equal(pickPort(false), 443);
+});
+
+test('pickPort returns a CF port when randomPort is true', () => {
+  const VALID = [443, 2053, 2083, 2087, 2096, 8443];
+  for (let i = 0; i < 20; i++) assert.ok(VALID.includes(pickPort(true)));
 });

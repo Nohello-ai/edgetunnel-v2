@@ -1,4 +1,4 @@
-export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 1024, resetVersion = 0 }) {
+export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 1024, resetVersion = 0, onLimit = null }) {
   let pendingUpload = 0;
   let pendingDownload = 0;
   let counted = 0;
@@ -8,7 +8,7 @@ export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 
 
   const schedule = () => {
     const task = flush();
-    if (ctx?.waitUntil) ctx.waitUntil(task);
+    if (ctx?.waitUntil) ctx.waitUntil(task.catch(() => {}));
     return task;
   };
 
@@ -29,7 +29,10 @@ export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 
             body: JSON.stringify({ delta, resetVersion }),
           });
           const result = await resp.json().catch(() => ({}));
-          if (!result.allowed) throw new UsageLimitError();
+        if (!result.allowed) {
+          if (onLimit) try { onLimit(new UsageLimitError()); } catch {}
+          throw new UsageLimitError();
+        }
           budget = result.budget || budget;
         } catch (error) {
           if (error instanceof UsageLimitError) throw error;
@@ -42,7 +45,7 @@ export function createUsageMeter({ userID, quotaDO, ctx, flushThreshold = 256 * 
       flushing = null;
       if ((pendingUpload !== 0 || pendingDownload !== 0) && !needsReschedule) {
         needsReschedule = true;
-        if (ctx?.waitUntil) ctx.waitUntil(flush());
+        if (ctx?.waitUntil) ctx.waitUntil(flush().catch(() => {}));
       }
     });
     return flushing;

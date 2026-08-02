@@ -31,6 +31,7 @@ test('pipeline finishes when remote TCP closes before client transport', async (
     start(controller) {
       inputController = controller;
       controller.enqueue(packet);
+      controller.close();
     },
   });
   let transportClosed = false;

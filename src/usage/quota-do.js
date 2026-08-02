@@ -21,6 +21,18 @@ export class QuotaDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    // 设置 25 小时后的 alarm，确保即使无 RPC 也能触发日切
+    this.state.storage.setAlarm(Date.now() + 25 * 60 * 60 * 1000).catch(() => {});
+  }
+
+  async alarm() {
+    const stored = await this.state.storage.get('quota');
+    if (stored) {
+      await this.maybeRollover(stored);
+      await this.state.storage.put('quota', stored);
+    }
+    // 续设下一个 alarm
+    this.state.storage.setAlarm(Date.now() + 25 * 60 * 60 * 1000).catch(() => {});
   }
 
   async fetch(request) {
@@ -132,8 +144,17 @@ export class QuotaDO {
 
   async handleReport(request) {
     const body = await request.json().catch(() => ({}));
-    const delta = Number(body.delta) || 0;
-    const resetVersion = Number(body.resetVersion) || 0;
+    const delta = Number(body.delta);
+    const resetVersion = Number(body.resetVersion);
+
+    // delta 必须是安全正整数，上限 1GB（单次上报不可能超过）
+    if (!Number.isSafeInteger(delta) || delta < 0 || delta > 1_073_741_824) {
+      return json({ error: 'INVALID_DELTA' }, 400);
+    }
+    // resetVersion 必须是安全非负整数
+    if (!Number.isSafeInteger(resetVersion) || resetVersion < 0) {
+      return json({ error: 'INVALID_RESET_VERSION' }, 400);
+    }
 
     const s = await this.loadState();
 

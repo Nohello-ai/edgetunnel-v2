@@ -20,5 +20,6 @@ export class UsageLimitError extends Error {
 export function asAppError(error) {
   if (error instanceof AppError) return error;
   if (error instanceof UsageLimitError) return error;
-  return new AppError('INTERNAL_ERROR', 500, 'internal error');
+  const message = error?.message || 'internal error';
+  return new AppError('INTERNAL_ERROR', 500, message);
 }

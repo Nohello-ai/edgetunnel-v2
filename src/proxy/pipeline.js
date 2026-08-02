@@ -18,6 +18,7 @@ export function startDataFlowPipeline({ request, session, connector, quotaDO, ct
     ctx,
     flushThreshold: 256 * 1024,
     resetVersion: session.resetVersion,
+    onLimit: () => transport.close(new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403)).catch(() => {}),
   });
   meter.setBudget(session.budget);
   const task = runPipeline({ transport, session, connector, meter })
@@ -36,10 +37,11 @@ export async function runPipeline({ transport, session, connector, meter }) {
   let parsed;
 
   try {
-    const deadline = Date.now() + 10000;
+    const headerTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new AppError('PROTOCOL_HEADER_TIMEOUT', 408)), 10000);
+    });
     while (!parsed) {
-      if (Date.now() > deadline) throw new AppError('PROTOCOL_HEADER_TIMEOUT', 408);
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), headerTimeout]);
       if (done) throw new AppError('INCOMPLETE_PROTOCOL_HEADER', 400);
       meter.addUpload(value.byteLength);
       const result = parser.push(value);
@@ -64,19 +66,26 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
   let responseHeaderPending = request.responseHeader || new Uint8Array();
   let chunk = request.payload;
   while (true) {
-    for (const datagram of codec.push(chunk)) {
-      if (datagram.port !== 53) throw new AppError('UDP_UNSUPPORTED', 400);
-      const dnsPromise = resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
-      const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError('DNS_TIMEOUT', 504)), 5000));
-      const payload = await Promise.race([dnsPromise, timeout]);
-      const response = codec.encode({ ...datagram, payload });
-      if (responseHeaderPending.byteLength) {
-        await transport.write(responseHeaderPending);
-        meter.addDownload(responseHeaderPending.byteLength);
-        responseHeaderPending = new Uint8Array();
+    const datagrams = codec.push(chunk);
+    if (datagrams.length > 0) {
+      for (const d of datagrams) {
+        if (d.port !== 53) throw new AppError('UDP_UNSUPPORTED', 400);
       }
-      meter.addDownload(response.byteLength);
-      await transport.write(response);
+      const responses = await Promise.all(datagrams.map(async (datagram) => {
+        const dnsPromise = resolveDnsOverTcp({ payload: datagram.payload, connector, hostname: datagram.hostname, port: 53 });
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new AppError('DNS_TIMEOUT', 504)), 5000));
+        const payload = await Promise.race([dnsPromise, timeout]);
+        return codec.encode({ ...datagram, payload });
+      }));
+      for (const response of responses) {
+        if (responseHeaderPending.byteLength) {
+          await transport.write(responseHeaderPending);
+          meter.addDownload(responseHeaderPending.byteLength);
+          responseHeaderPending = new Uint8Array();
+        }
+        meter.addDownload(response.byteLength);
+        await transport.write(response);
+      }
     }
     const next = await reader.read();
     if (next.done) break;

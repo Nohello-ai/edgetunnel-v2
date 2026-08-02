@@ -41,7 +41,7 @@ export function createAdmissionService({ users, bans, usage, config, quotaDO }) 
       const quotaBytes = resolveQuota(user, runtimeConfig);
 
       let admission = { allowed: true, remaining: 0, budget: 0, resetVersion: 0 };
-      if (quotaDO && quotaBytes > 0) {
+      if (quotaDO) {
         const id = quotaDO.idFromName(route.userID);
         const stub = quotaDO.get(id);
         const resp = await stub.fetch('https://do/admit');

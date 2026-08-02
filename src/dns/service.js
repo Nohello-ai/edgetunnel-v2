@@ -103,7 +103,7 @@ function parseDNSName(buf, pos) {
   return [labels.join('.'), endPos];
 }
 
-export async function resolveDnsOverTcp({ payload, connector, hostname = '8.8.4.4', port = 53 }) {
+export async function resolveDnsOverTcp({ payload, connector, hostname = '1.1.1.1', port = 53 }) {
   const query = toBytes(payload);
   if (query.byteLength === 0 || query.byteLength > 65535) {
     throw new AppError('INVALID_DNS_PAYLOAD', 400);
@@ -142,14 +142,20 @@ export async function resolveDnsOverTcp({ payload, connector, hostname = '8.8.4.
 async function readDnsFrame(reader) {
   let buffer = new Uint8Array();
   let expected = -1;
-  while (true) {
+  let reads = 0;
+  const MAX_READS = 64;
+  while (reads < MAX_READS) {
     const { done, value } = await reader.read();
     if (done) return null;
+    reads++;
     buffer = concat(buffer, toBytes(value));
-    if (expected < 0 && buffer.byteLength >= 2) expected = (buffer[0] << 8) | buffer[1];
-    if (expected > 65535) throw new AppError('DNS_FRAME_TOO_LARGE', 400);
+    if (expected < 0 && buffer.byteLength >= 2) {
+      expected = (buffer[0] << 8) | buffer[1];
+      if (expected > 65535) throw new AppError('DNS_FRAME_TOO_LARGE', 400);
+    }
     if (expected >= 0 && buffer.byteLength >= expected + 2) return buffer.slice(2, expected + 2);
   }
+  throw new AppError('DNS_FRAME_TOO_SLOW', 408);
 }
 
 function concat(a, b) {

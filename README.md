@@ -457,27 +457,75 @@ curl -X POST https://your-worker.workers.dev/api/auth/login \
 
 ## 环境变量与 Secrets
 
+### 最低运行时所需变量
+
+项目启动必须配置以下资源，否则无法运行：
+
+| 变量/Binding | 类型 | 必要性 | 说明 |
+|-------------|------|--------|------|
+| `DB` | D1 Binding | **必须** | D1 数据库，存储用户/会话/封禁/用量等 |
+| `KV` | KV Binding | **必须** | KV Namespace，存储全局配置和用量缓存 |
+| `QUOTA_DO` | Durable Object Binding | **必须** | 流量配额 DO，强一致计量与断连控制 |
+| `BOOTSTRAP_ADMIN_USER` | Secret | **首次必须** | 引导管理员用户名，创建后可删除 |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Secret | **首次必须** | 引导管理员密码，创建后可删除 |
+
+> 最低运行条件：DB + KV + QUOTA_DO 三个 Binding 不可缺，首次部署还需 Bootstrap Secrets 创建管理员账户。
+
 ### Secrets（通过 `wrangler secret put` 设置）
 
 | Secret 名 | 必要性 | 说明 |
 |-----------|--------|------|
 | `BOOTSTRAP_ADMIN_USER` | 首次部署 | 引导管理员用户名，创建后可删除 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 首次部署 | 引导管理员密码，创建后可删除 |
+| `TURNSTILE_SECRET_KEY` | 可选 | Cloudflare Turnstile 后端验证密钥。配置后启用登录/注册人机验证；不配置则跳过验证，仅靠失败次数锁定兜底 |
 
-### 环境变量
+### 环境变量（明文 `[vars]`）
 
-本项目不使用明文环境变量（`[vars]`）。所有配置通过 KV `global_config` 键存储，可通过 `PATCH /api/admin/config` 运行时修改。
+| 变量名 | 必要性 | 说明 |
+|--------|--------|------|
+| `TURNSTILE_SITE_KEY` | 可选 | Cloudflare Turnstile 前端 widget 公钥。需与 `TURNSTILE_SECRET_KEY` 同时配置，否则验证不生效 |
 
-代码中 `env.*` 的访问全部对应 Bindings，不存在额外环境变量：
+> 其余配置（协议、传输、反代、订阅转换等）全部通过 KV `global_config` 键存储，用 `PATCH /api/admin/config` 运行时修改，不需要环境变量。
+
+### Turnstile 人机验证
+
+在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → Turnstile 创建一个 Widget，获取 Site Key 和 Secret Key：
+
+```bash
+# Secret Key（加密存储）
+wrangler secret put TURNSTILE_SECRET_KEY
+# 输入你的 Secret Key
+
+# Site Key（明文，写入 wrangler.toml [vars] 或 Dashboard）
+# wrangler.toml:
+# [vars]
+# TURNSTILE_SITE_KEY = "0x4AAAAAAA..."
+```
+
+**行为逻辑**：
+
+| 场景 | 第 1-2 次 | 第 3-9 次 | 第 10 次 |
+|------|----------|----------|---------|
+| 登录失败 | 正常放行 | 要求 Turnstile 验证 | 锁 IP 15 分钟 |
+| 注册 | 正常放行 | 要求 Turnstile 验证 | 锁 IP 15 分钟 |
+| 未配置 Turnstile | 正常放行 | 正常放行（跳过验证） | 锁 IP 15 分钟 |
+
+前端收到 `403 REQUIRE_CAPTCHA` 时，响应体包含 `turnstileSiteKey`，前端渲染 Turnstile widget，用户完成验证后带 `turnstileToken` 字段重发请求。
+
+### Bindings 总览
+
+代码中 `env.*` 的访问全部对应 Bindings 或 Secret/Var：
 
 | `env.*` | 对应 Binding | 类型 |
 |---------|-------------|------|
 | `env.DB` | `DB` | D1 数据库 |
 | `env.KV` | `KV` | KV Namespace |
-| `env.ADMIN_BUCKET` | `ADMIN_BUCKET` | R2 Bucket |
+| `env.ADMIN_BUCKET` | `ADMIN_BUCKET` | R2 Bucket（可选） |
 | `env.QUOTA_DO` | `QUOTA_DO` | Durable Object |
 | `env.BOOTSTRAP_ADMIN_USER` | — | Secret |
 | `env.BOOTSTRAP_ADMIN_PASSWORD` | — | Secret |
+| `env.TURNSTILE_SITE_KEY` | — | 环境变量（`[vars]`） |
+| `env.TURNSTILE_SECRET_KEY` | — | Secret |
 
 ---
 
@@ -577,9 +625,9 @@ CREATE TABLE usage (
 
 ```sql
 CREATE TABLE login_attempts (
-  fingerprint  TEXT PRIMARY KEY,             -- IP:username
+  fingerprint  TEXT PRIMARY KEY,             -- 前缀:Key（ip:1.2.3.4 / user:alice / register:1.2.3.4）
   failures     INTEGER NOT NULL DEFAULT 0,
-  locked_until TEXT,                         -- 5 次失败后锁定 15 分钟
+  locked_until TEXT,                         -- 10 次失败后锁定 15 分钟
   updated_at   TEXT NOT NULL
 );
 ```
@@ -795,7 +843,8 @@ Checkout → Node.js 20 → npm ci → 设置版本号
 - 密码使用 PBKDF2 哈希存储，不明文存储或放入 URL
 - 控制面使用 `HttpOnly; Secure; SameSite=Strict` Cookie
 - VLESS UUID 和 Trojan secret 与网页登录密码互相独立
-- 登录失败 5 次锁定 15 分钟（基于 IP + 用户名指纹）
+- 登录/注册双维度频率限制：IP 维度 + 用户名维度独立计数，2 次失败后触发 Cloudflare Turnstile 人机验证，10 次失败锁定 15 分钟（详见 [Turnstile 人机验证](#turnstile-人机验证)）
+- /report 流量上报 delta 参数强制校验安全整数范围，防止负数绕过或 Infinity 归零
 - 旧版 `users.password` 明文列不能直接 SQL 迁移到 PBKDF2，应新建库重建用户
 
 ---

@@ -69,26 +69,26 @@ function validQuota(value) {
 }
 function randomToken(bytes) { const data = crypto.getRandomValues(new Uint8Array(bytes)); return [...data].map((v) => v.toString(16).padStart(2, '0')).join(''); }
 
-// ── DO 同步 helpers(非致命:DO 不可用时静默降级,冷启动会从 D1 兜底) ──
+// ── 传输层通知 helpers（通过 TRANSMISSION Service Binding，非致命：不可用时静默降级）──
 
 async function syncQuotaToDO(env, userID, quota) {
-  if (!env?.QUOTA_DO) return;
+  if (!env?.TRANSMISSION) return;
   try {
-    const id = env.QUOTA_DO.idFromName(userID);
-    const stub = env.QUOTA_DO.get(id);
-    await stub.fetch('https://do/set-quota', {
+    await env.TRANSMISSION.fetch('https://transmission/internal/update-quota', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ quota }),
+      body: JSON.stringify({ userId: userID, quota }),
     });
-  } catch { /* DO 不可用,D1 已更新,DO 冷启动时会兜底 */ }
+  } catch { /* 传输层不可用，D1 已更新，下次准入时管理层会拦截 */ }
 }
 
 async function resetUuidInDO(env, userID) {
-  if (!env?.QUOTA_DO) return;
+  if (!env?.TRANSMISSION) return;
   try {
-    const id = env.QUOTA_DO.idFromName(userID);
-    const stub = env.QUOTA_DO.get(id);
-    await stub.fetch('https://do/reset-uuid', { method: 'POST' });
-  } catch { /* 同上 */ }
+    await env.TRANSMISSION.fetch('https://transmission/internal/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: userID }),
+    });
+  } catch { /* 传输层不可用，admission 层的 ban 检查仍生效 */ }
 }

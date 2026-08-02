@@ -47,24 +47,26 @@ function route() {
 
 function createService(options = {}) {
   const exhausted = (options.total || 0) >= 1024;
-  return createAdmissionService({
-    users: {
-      getByID: async () => ({
-        userID: USER_ID,
-        username: 'alice',
-        role: 'user',
-        disabled: Boolean(options.disabled),
+  const userAdmin = {
+    fetch: async () => {
+      if (options.disabled) return jsonResponse({ allowed: false, reason: 'USER_DISABLED' });
+      if (options.ban) return jsonResponse({ allowed: false, reason: 'USER_BANNED' });
+      if (exhausted) return jsonResponse({ allowed: false, reason: 'TRAFFIC_QUOTA_EXHAUSTED' });
+      return jsonResponse({
+        allowed: true,
         quotaBytes: 1024,
-        settings: {},
-      }),
+        used: options.total || 0,
+        user: { userID: USER_ID, username: 'alice', role: 'user', settings: {}, trojanSecret: '' },
+      });
     },
-    bans: { getActive: async () => options.ban || null },
-    usage: { get: async () => ({ total: options.total || 0 }) },
+  };
+  return createAdmissionService({
+    userAdmin,
     config: { getRuntime: async () => ({ protocols: options.protocols || ['vless'], transports: options.transports || ['websocket', 'grpc', 'xhttp'] }) },
     quotaDO: {
       idFromName: () => 'do-id',
       get: () => ({
-        fetch: async () => jsonResponse({ allowed: !exhausted, remaining: exhausted ? 0 : 1024 - (options.total || 0), budget: exhausted ? 0 : 100 * 1024 * 1024, resetVersion: 0 }),
+        fetch: async () => jsonResponse({ stopVersion: 0 }),
       }),
     },
   });

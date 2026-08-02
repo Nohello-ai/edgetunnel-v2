@@ -71,28 +71,19 @@ export function createApiRouter({ users, sessions }) {
 
 async function readBody(request) { if (!request.headers.get('content-type')?.includes('application/json')) throw new AppError('JSON_REQUIRED', 415); try { return await request.json(); } catch { throw new AppError('INVALID_JSON', 400); } }
 
-// 优先从 DO 拿实时用量(强一致),DO 不可用时降级到 D1(可能滞后数十秒)
+// 从 D1 查询用量（流量每 5MB 上报一次，可能有最多 5MB 的延迟）
 async function fetchUsage(env, userID) {
-  if (env?.QUOTA_DO) {
-    try {
-      const id = env.QUOTA_DO.idFromName(userID);
-      const stub = env.QUOTA_DO.get(id);
-      const resp = await stub.fetch('https://do/snapshot');
-      const s = await resp.json();
-      return {
-        upload: 0,
-        download: 0,
-        total: s.totalUsed || 0,
-        quota: s.totalQuota || 0,
-        remaining: s.remaining || 0,
-        todayUsed: s.todayUsed || 0,
-      };
-    } catch { /* DO 不可用,降级 D1 */ }
-  }
   const row = await env.DB?.prepare('SELECT upload,download,total FROM usage WHERE user_id = ?').bind(userID).first();
-  return row
-    ? { upload: Number(row.upload), download: Number(row.download), total: Number(row.total) }
-    : { upload: 0, download: 0, total: 0 };
+  const quotaRow = await env.DB?.prepare('SELECT quota_bytes FROM users WHERE user_id = ?').bind(userID).first();
+  const quotaBytes = Number(quotaRow?.quota_bytes || 0);
+  const total = Number(row?.total || 0);
+  return {
+    upload: Number(row?.upload || 0),
+    download: Number(row?.download || 0),
+    total,
+    quota: quotaBytes,
+    remaining: quotaBytes > 0 ? Math.max(0, quotaBytes - total) : 0,
+  };
 }
 
 async function buildSubscription(env, user, request) {

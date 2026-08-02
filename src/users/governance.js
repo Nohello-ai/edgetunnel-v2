@@ -30,14 +30,16 @@ function parseUntil(value) {
   return new Date(timestamp).toISOString();
 }
 
-// 封禁时递增 DO resetVersion,活跃连接下次上报被拒(非致命:admission 层也会拦新连接)
+// 封禁时通知传输层停止用户所有活跃连接（通过 TRANSMISSION Service Binding，非致命：admission 层也会拦新连接）
 async function resetUuidInDO(env, userID) {
-  if (!env?.QUOTA_DO) return;
+  if (!env?.TRANSMISSION) return;
   try {
-    const id = env.QUOTA_DO.idFromName(userID);
-    const stub = env.QUOTA_DO.get(id);
-    await stub.fetch('https://do/reset-uuid', { method: 'POST' });
-  } catch { /* DO 不可用,admission 层的 ban 检查仍生效 */ }
+    await env.TRANSMISSION.fetch('https://transmission/internal/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: userID }),
+    });
+  } catch { /* 传输层不可用，admission 层的 ban 检查仍生效 */ }
 }
 
 export function validateBanTarget(user) {

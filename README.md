@@ -34,7 +34,18 @@ EdgeTunnel Core 是一个运行在 Cloudflare Workers 上的代理隧道系统�
 - **流量计量**：基于 Durable Object 的强一致实时计数，支持配额控制与即时断连
 - **用户管理**：D1 数据库存储用户/会话/封禁/配额，PBKDF2 密码哈希
 - **订阅生成**：协议 × 传输 × HOSTS 笛卡尔积展开，支持随机路径、0-RTT、TLS 分片、ECH
-- **构建**：esbuild 单文件打包，零运行时依赖，产物 `_worker.js` 直接上传
+- **构建**：esbuild 单文件打包，零运行时依赖，产物为两个独立 JS 文件，直接上传部署
+
+### 双 Worker 架构
+
+项目拆分为两个独立 Worker，各自打包成一个单 JS 文件、独立部署、绑定不同资源：
+
+| Worker | 入口源码 | 构建产物 | 职责 |
+|--------|---------|---------|------|
+| 传输层 | `src/index-transmission.js` | `_worker-transmission.js` | 代理隧道 + 强一致流量计量 + DO（导出 `QuotaDO` 类） |
+| 用户管理层 | `src/index-admin.js` | `_worker-admin.js` | API + 认证 + 配置 + 订阅 + 管理面板 |
+
+两个产物是**唯二需要上传的文件**，分别上传到各自的 Cloudflare Worker。`src/index.js` 仅作为行为对照的旧单入口保留，不再用于打包部署。
 
 ---
 
@@ -91,52 +102,25 @@ EdgeTunnel Core 是一个运行在 Cloudflare Workers 上的代理隧道系统�
 ## 架构总览
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │          Cloudflare Worker          │
-                    │            src/index.js             │
-                    └──────────────┬──────────────────────┘
-                                   │ classifyRequest()
-                    ┌──────────────┼──────────────────────┐
-                    │              │                       │
-              ┌─────▼─────┐  ┌─────▼──────┐         ┌──────▼──────┐
-              │  控制面    │  │   数据面    │         │   静态资源   │
-              │ /api/*    │  │ /ws/grpc/  │         │ R2 (可选)   │
-              │           │  │   xhttp/   │         └─────────────┘
-              └─────┬─────┘  └─────┬──────┘
-                    │              │
-         ┌──────────┼────────┐     │
-         │          │        │     │
-    ┌────▼───┐ ┌────▼──┐ ┌───▼────┐ │
-    │  Auth  │ │Users  │ │Config  │ │
-    │ D1/KV  │ │  D1   │ │  KV    │ │
-    └────────┘ └───────┘ └────────┘ │
-                                       │
-                    ┌──────────────────▼──────────────────┐
-                    │        Admission Service             │
-                    │  user检查 → ban检查 → DO配额裁判     │
-                    │  → 协议/传输校验 → 返回 Session       │
-                    └──────────────────┬──────────────────┘
-                                       │
-                    ┌──────────────────▼──────────────────┐
-                    │       Data Flow Pipeline             │
-                    │  Transport → ProtocolParser →        │
-                    │  Connector → 双向TCP管道/UDP-DNS     │
-                    │  ↑ meter (本地计量器)                 │
-                    └──────────┬──────────────┬────────────┘
-                               │              │
-                    ┌──────────▼──┐    ┌──────▼──────┐
-                    │  QuotaDO    │    │  Connector   │
-                    │ (每用户实例) │    │ Direct/Chain │
-                    │ 强一致计数   │    └──────────────┘
-                    │ 配额裁判     │
-                    │ 断连控制     │
-                    └──────┬──────┘
-                           │ 每10s增量同步
-                    ┌──────▼──────┐    ┌──────────┐
-                    │     KV      │───►│    D1    │
-                    │ usage:uuid  │    │  usage   │
-                    │ (面板展示)   │    │ (对账)    │
-                    └─────────────┘    └──────────┘
+   传输层 Worker _worker-transmission.js        用户管理层 Worker _worker-admin.js
+   ┌─────────────────────────────────────┐     ┌─────────────────────────────────────┐
+   │  数据面 /ws /grpc /xhttp            │     │  控制面 /api/* /sub                  │
+   │  Admission → Pipeline → Connector   │     │  Auth → Users → Config → Sub         │
+   │  QuotaDO（导出类，强一致计量）        │     │  R2 静态面板（可选）                   │
+   └─────────────────────────────────────┘     └─────────────────────────────────────┘
+                          │                              │
+              ┌───────────┴───────────┐      ┌──────────┴──────────┐
+              │                       │      │                      │
+        ┌─────▼─────┐          ┌──────▼──────┐ │
+        │  QuotaDO  │          │  D1 / KV    │ │
+        │ (每用户实例)│         │ (用户/配置)  │ │
+        │ 强一致计数  │          └─────────────┘ │
+        └─────┬─────┘                            │
+              │ 每 10s 增量同步                   │
+        ┌─────▼─────┐    ┌──────────┐    ┌──────▼──────┐
+        │    KV     │───►│    D1    │    │  Connector  │
+        │ usage:uuid│    │  usage   │    │ Direct/Chain│
+        └───────────┘    └──────────┘    └─────────────┘
 ```
 
 ---
@@ -256,7 +240,9 @@ RPC 接口:
 ```
 edgetunnel-v2/
 ├── src/
-│   ├── index.js                    # 主入口：路由分发
+│   ├── index.js                    # 旧单入口（行为对照，不再用于打包）
+│   ├── index-transmission.js       # 传输层入口 → _worker-transmission.js
+│   ├── index-admin.js              # 用户管理层入口 → _worker-admin.js
 │   ├── admission/
 │   │   ├── repositories.js         # 准入依赖工厂
 │   │   └── service.js              # 准入服务（5 道关卡）
@@ -334,121 +320,139 @@ edgetunnel-v2/
 ├── schema.sql                      # 完整 D1 schema（幂等）
 ├── wrangler.example.toml           # Cloudflare 配置模板
 ├── package.json
-└── _worker.js                      # 构建产物（唯一需上传的文件）
+├── _worker-transmission.js         # 构建产物·传输层（上传到传输 Worker）
+└── _worker-admin.js                # 构建产物·用户管理层（上传到管理 Worker）
 ```
 
 ---
 
 ## 部署指南
 
+部署方式**有且只有一种**：把构建出的单 JS 文件上传到 Cloudflare Dashboard 对应的 Worker。本项目不使用 `wrangler deploy`、不通过 Git 自动部署。下面分别给出两个 Worker 的资源准备与上传步骤。
+
+> 资源（D1 / KV / R2 / DO 命名空间）只需创建一次，两个 Worker 共用同一个 D1 与 KV；Durable Object 命名空间归属于传输层 Worker。资源创建可用 Wrangler CLI 或 Dashboard，但**代码部署只用 JS 文件上传**。
+
 ### 前置条件
 
 - Cloudflare 账户
-- Wrangler CLI（`npm install -g wrangler`）
-- Node.js 20+
+- Node.js 20+（仅本地构建产物用）
+- Wrangler CLI（`npm install -g wrangler`，仅用于一次性创建 D1/KV/R2 资源，不用于部署）
 
-### 步骤
+### 一次性资源准备
 
-#### 1. 克隆仓库
+#### 1. 克隆仓库并构建产物
 
 ```bash
 git clone https://github.com/Nohello-ai/edgetunnel-v2.git
 cd edgetunnel-v2
 npm ci
+npm test          # 运行测试
+npm run check     # 语法检查
+npm run bundle    # 打包出两个产物
 ```
 
-#### 2. 创建 D1 数据库
+构建完成后得到两个 JS 文件（唯二需要上传的文件）：
+
+- `_worker-transmission.js` → 上传到**传输层 Worker**
+- `_worker-admin.js` → 上传到**用户管理层 Worker**
+
+#### 2. 创建 D1 数据库（两个 Worker 共用）
 
 ```bash
 wrangler d1 create edgetunnel-db
 # 记下返回的 database_id
-```
-
-执行 schema：
-
-```bash
 wrangler d1 execute edgetunnel-db --remote --file=migrations/0001_initial.sql
 wrangler d1 execute edgetunnel-db --remote --file=migrations/0002_login_attempts.sql
 ```
 
-#### 3. 创建 KV Namespace
+#### 3. 创建 KV Namespace（两个 Worker 共用）
 
 ```bash
 wrangler kv namespace create KV
 # 记下返回的 id
 ```
 
-#### 4. 创建 R2 Bucket（可选，用于管理面板静态文件）
+#### 4. 创建 R2 Bucket（可选，仅管理层用）
 
 ```bash
 wrangler r2 bucket create edgetunnel-admin
 ```
 
-#### 5. 配置 wrangler.toml
+---
 
-复制 `wrangler.example.toml` 为 `wrangler.toml`，替换以下占位符：
+### 传输层 Worker 部署
 
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "edgetunnel-db"              # ← 替换为你的数据库名
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # ← 替换为你的 database_id
+**上传文件**：`_worker-transmission.js`
 
-[[kv_namespaces]]
-binding = "KV"
-id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"      # ← 替换为你的 KV id
+**所需 Bindings**：
 
-[[r2_buckets]]
-binding = "ADMIN_BUCKET"
-bucket_name = "edgetunnel-admin"             # ← 替换为你的 bucket 名
+| Binding | 类型 | 必要性 | 说明 |
+|---------|------|--------|------|
+| `DB` | D1 | 必须 | 用户/封禁查询（只读） |
+| `KV` | KV | 必须 | 全局配置读取（只读） |
+| `QUOTA_DO` | Durable Object | 必须 | 强一致流量计量与断连；**此 Worker 导出 `QuotaDO` 类，DO 实例归属于此** |
 
-[durable_objects]
-bindings = [
-  { name = "QUOTA_DO", class_name = "QuotaDO" }
-]
+**上传步骤**：
 
-[[migrations]]
-tag = "v1"
-new_classes = ["QuotaDO"]
-```
+1. Cloudflare Dashboard → Workers & Pages → 创建新 Worker（如 `edgetunnel-transmission`）
+2. 进入 Worker → 编辑代码 → 上传 `_worker-transmission.js` → 保存部署
+3. Settings → Bindings，依次添加：
+   - D1 database：变量名 `DB` → 选择 `edgetunnel-db`
+   - KV namespace：变量名 `KV` → 选择上一步创建的 KV
+   - Durable Object：变量名 `QUOTA_DO` → class `QuotaDO`（此 Worker 导出该类，命名空间在此创建）
 
-#### 6. 设置 Bootstrap Secrets（首次启动用）
+> 传输层不需要 `ADMIN_BUCKET`、`BOOTSTRAP_*`、`TURNSTILE_*`。
+
+---
+
+### 用户管理层 Worker 部署
+
+**上传文件**：`_worker-admin.js`
+
+**所需 Bindings / Secrets / Vars**：
+
+| Binding / 变量 | 类型 | 必要性 | 说明 |
+|---------------|------|--------|------|
+| `DB` | D1 | 必须 | 用户/会话/封禁/用量/配置/登录失败记录（读写） |
+| `KV` | KV | 必须 | `global_config` 读写 + 用量展示 |
+| `QUOTA_DO` | Durable Object | 推荐 | 续费 `set-quota` / 踢线 `reset-uuid` / 快照实时生效所需。绑定到**传输层 Worker 的 `QuotaDO` 命名空间**（跨 Worker 绑定）；不配置则这些操作不实时下发到在线 DO（DO 冷启动后会从 D1 重新加载配额） |
+| `ADMIN_BUCKET` | R2 | 可选 | 管理面板静态文件 |
+| `BOOTSTRAP_ADMIN_USER` | Secret | 首次必须 | 引导管理员用户名，创建后可删除 |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Secret | 首次必须 | 引导管理员密码，创建后可删除 |
+| `TURNSTILE_SECRET_KEY` | Secret | 可选 | Cloudflare Turnstile 后端密钥 |
+| `TURNSTILE_SITE_KEY` | 文本变量 | 可选 | Cloudflare Turnstile 前端公钥 |
+
+**上传步骤**：
+
+1. Cloudflare Dashboard → Workers & Pages → 创建新 Worker（如 `edgetunnel-admin`）
+2. 进入 Worker → 编辑代码 → 上传 `_worker-admin.js` → 保存部署
+3. Settings → Bindings，依次添加：
+   - D1 database：变量名 `DB` → 选择同一个 `edgetunnel-db`
+   - KV namespace：变量名 `KV` → 选择同一个 KV
+   - Durable Object：变量名 `QUOTA_DO` → 选择传输层 Worker 的 `QuotaDO` 命名空间（跨 Worker）
+   - R2 bucket（可选）：变量名 `ADMIN_BUCKET` → 选择 `edgetunnel-admin`
+4. Settings → Variables and Secrets，添加：
+   - Secret `BOOTSTRAP_ADMIN_USER` = 管理员用户名（首次登录后可删除）
+   - Secret `BOOTSTRAP_ADMIN_PASSWORD` = 管理员密码（首次登录后可删除）
+   - （可选）Secret `TURNSTILE_SECRET_KEY`、文本变量 `TURNSTILE_SITE_KEY`
+
+> 管理层不导出 `QuotaDO` 类，只通过 `QUOTA_DO` 绑定远程调用传输层的 DO。
+
+---
+
+### 验证
 
 ```bash
-wrangler secret put BOOTSTRAP_ADMIN_USER
-# 输入管理员用户名
+# 传输层版本探测
+curl https://edgetunnel-transmission.<你的子域>.workers.dev/version
+# {"name":"edgetunnel-transmission","version":"3.0.0"}
 
-wrangler secret put BOOTSTRAP_ADMIN_PASSWORD
-# 输入管理员密码
-```
+# 管理层版本探测
+curl https://edgetunnel-admin.<你的子域>.workers.dev/version
+# {"name":"edgetunnel-admin","version":"3.0.0"}
 
-> 创建管理员后可以删除这两个 secret。
-
-#### 7. 构建并部署
-
-```bash
-npm test          # 运行测试
-npm run check     # 语法检查
-npm run build     # 打包为 _worker.js
-```
-
-上传方式（任选其一）：
-
-```bash
-# 方式 A：wrangler 部署
-wrangler deploy
-
-# 方式 B：手动上传 _worker.js 到 Cloudflare Dashboard
-# Workers & Pages → 你的 Worker → Quick Edit → 上传 _worker.js
-```
-
-#### 8. 验证
-
-```bash
-curl https://your-worker.workers.dev/version
-# {"name":"edgetunnel-core","version":"3.0.0"}
-
-curl -X POST https://your-worker.workers.dev/api/auth/login \
+# 管理层登录（首次用 bootstrap 凭据）
+curl -X POST https://edgetunnel-admin.<你的子域>.workers.dev/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"你的密码"}'
 ```
@@ -457,50 +461,39 @@ curl -X POST https://your-worker.workers.dev/api/auth/login \
 
 ## 环境变量与 Secrets
 
-### 最低运行时所需变量
+两个 Worker 的变量互不相同，下面分开列出。所有 Secret / 文本变量都在 Cloudflare Dashboard → Worker → Settings → Variables and Secrets 中配置（不使用 `wrangler secret put` 部署）。
 
-项目启动必须配置以下资源，否则无法运行：
+### 传输层 Worker（`_worker-transmission.js`）
 
 | 变量/Binding | 类型 | 必要性 | 说明 |
 |-------------|------|--------|------|
-| `DB` | D1 Binding | **必须** | D1 数据库，存储用户/会话/封禁/用量等 |
-| `KV` | KV Binding | **必须** | KV Namespace，存储全局配置和用量缓存 |
-| `QUOTA_DO` | Durable Object Binding | **必须** | 流量配额 DO，强一致计量与断连控制 |
+| `DB` | D1 | **必须** | 用户存在性 / 封禁查询（只读） |
+| `KV` | KV | **必须** | 全局配置读取（只读） |
+| `QUOTA_DO` | Durable Object | **必须** | 强一致流量计量与即时断连；此 Worker 导出 `QuotaDO` 类，DO 实例归属此 |
+
+> 传输层**不需要** `ADMIN_BUCKET`、`BOOTSTRAP_*`、`TURNSTILE_*`。
+
+### 用户管理层 Worker（`_worker-admin.js`）
+
+| 变量/Binding | 类型 | 必要性 | 说明 |
+|-------------|------|--------|------|
+| `DB` | D1 | **必须** | 用户/会话/封禁/用量/配置/登录失败记录（读写） |
+| `KV` | KV | **必须** | `global_config` 读写 + 用量展示 |
+| `QUOTA_DO` | Durable Object | **推荐** | 续费 `set-quota` / 踢线 `reset-uuid` / 快照实时生效所需，绑定到传输层 Worker 的 `QuotaDO` 命名空间。不配置则这些操作不实时下发到在线 DO |
+| `ADMIN_BUCKET` | R2 | 可选 | 管理面板静态文件 |
 | `BOOTSTRAP_ADMIN_USER` | Secret | **首次必须** | 引导管理员用户名，创建后可删除 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | Secret | **首次必须** | 引导管理员密码，创建后可删除 |
-
-> 最低运行条件：DB + KV + QUOTA_DO 三个 Binding 不可缺，首次部署还需 Bootstrap Secrets 创建管理员账户。
-
-### Secrets（通过 `wrangler secret put` 设置）
-
-| Secret 名 | 必要性 | 说明 |
-|-----------|--------|------|
-| `BOOTSTRAP_ADMIN_USER` | 首次部署 | 引导管理员用户名，创建后可删除 |
-| `BOOTSTRAP_ADMIN_PASSWORD` | 首次部署 | 引导管理员密码，创建后可删除 |
-| `TURNSTILE_SECRET_KEY` | 可选 | Cloudflare Turnstile 后端验证密钥。配置后启用登录/注册人机验证；不配置则跳过验证，仅靠失败次数锁定兜底 |
-
-### 环境变量（明文 `[vars]`）
-
-| 变量名 | 必要性 | 说明 |
-|--------|--------|------|
-| `TURNSTILE_SITE_KEY` | 可选 | Cloudflare Turnstile 前端 widget 公钥。需与 `TURNSTILE_SECRET_KEY` 同时配置，否则验证不生效 |
+| `TURNSTILE_SECRET_KEY` | Secret | 可选 | Cloudflare Turnstile 后端密钥；配置后启用登录/注册人机验证，不配置则跳过验证，仅靠失败次数锁定兜底 |
+| `TURNSTILE_SITE_KEY` | 文本变量 | 可选 | Cloudflare Turnstile 前端公钥，需与 `TURNSTILE_SECRET_KEY` 同时配置 |
 
 > 其余配置（协议、传输、反代、订阅转换等）全部通过 KV `global_config` 键存储，用 `PATCH /api/admin/config` 运行时修改，不需要环境变量。
 
-### Turnstile 人机验证
+### Turnstile 人机验证（仅管理层）
 
-在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → Turnstile 创建一个 Widget，获取 Site Key 和 Secret Key：
+在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → Turnstile 创建一个 Widget，获取 Site Key 和 Secret Key，然后在**管理层 Worker** 的 Settings → Variables and Secrets 中添加：
 
-```bash
-# Secret Key（加密存储）
-wrangler secret put TURNSTILE_SECRET_KEY
-# 输入你的 Secret Key
-
-# Site Key（明文，写入 wrangler.toml [vars] 或 Dashboard）
-# wrangler.toml:
-# [vars]
-# TURNSTILE_SITE_KEY = "0x4AAAAAAA..."
-```
+- Secret `TURNSTILE_SECRET_KEY` = 你的 Secret Key（加密存储）
+- 文本变量 `TURNSTILE_SITE_KEY` = 你的 Site Key（明文）
 
 **行为逻辑**：
 
@@ -512,20 +505,18 @@ wrangler secret put TURNSTILE_SECRET_KEY
 
 前端收到 `403 REQUIRE_CAPTCHA` 时，响应体包含 `turnstileSiteKey`，前端渲染 Turnstile widget，用户完成验证后带 `turnstileToken` 字段重发请求。
 
-### Bindings 总览
+### Bindings 总览（按 Worker）
 
-代码中 `env.*` 的访问全部对应 Bindings 或 Secret/Var：
-
-| `env.*` | 对应 Binding | 类型 |
-|---------|-------------|------|
-| `env.DB` | `DB` | D1 数据库 |
-| `env.KV` | `KV` | KV Namespace |
-| `env.ADMIN_BUCKET` | `ADMIN_BUCKET` | R2 Bucket（可选） |
-| `env.QUOTA_DO` | `QUOTA_DO` | Durable Object |
-| `env.BOOTSTRAP_ADMIN_USER` | — | Secret |
-| `env.BOOTSTRAP_ADMIN_PASSWORD` | — | Secret |
-| `env.TURNSTILE_SITE_KEY` | — | 环境变量（`[vars]`） |
-| `env.TURNSTILE_SECRET_KEY` | — | Secret |
+| `env.*` | 归属 Worker | 对应 Binding | 类型 |
+|---------|------------|-------------|------|
+| `env.DB` | 两者 | `DB` | D1 数据库 |
+| `env.KV` | 两者 | `KV` | KV Namespace |
+| `env.QUOTA_DO` | 两者（传输层导出类，管理层跨 Worker 调用） | `QUOTA_DO` | Durable Object |
+| `env.ADMIN_BUCKET` | 仅管理层 | `ADMIN_BUCKET` | R2 Bucket（可选） |
+| `env.BOOTSTRAP_ADMIN_USER` | 仅管理层 | — | Secret（首次） |
+| `env.BOOTSTRAP_ADMIN_PASSWORD` | 仅管理层 | — | Secret（首次） |
+| `env.TURNSTILE_SITE_KEY` | 仅管理层 | — | 文本变量 |
+| `env.TURNSTILE_SECRET_KEY` | 仅管理层 | — | Secret |
 
 ---
 
@@ -792,17 +783,19 @@ CREATE TABLE global_config (
 npm ci              # 安装依赖（仅 esbuild）
 npm test            # 运行测试（node --test test/*.test.js）
 npm run check       # 语法检查（node --check）
-npm run build       # 打包（esbuild → _worker.js）
+npm run bundle      # 打包两个产物（esbuild）
 ```
+
+> `npm run build` 等同于 `npm run bundle`，均产出两个 JS 文件。
 
 ### 构建产物
 
-- 入口：`src/index.js`
-- 产物：`_worker.js`（唯一需上传的文件）
+- 传输层入口：`src/index-transmission.js` → 产物 `_worker-transmission.js`
+- 管理层入口：`src/index-admin.js` → 产物 `_worker-admin.js`
 - 格式：ESM，`target: es2022`，`platform: browser`
 - 外部依赖：`cloudflare:sockets`（运行时由 Cloudflare 提供）
-- 产物顶部标记：`// edgetunnel-core {version}`
-- 体积：约 115KB
+- 产物顶部标记：`// edgetunnel-transmission {version}` 与 `// edgetunnel-admin {version}`
+- 两个产物是唯二需要上传的文件，分别上传到各自的 Worker
 
 ### 测试覆盖
 
@@ -824,17 +817,17 @@ npm run build       # 打包（esbuild → _worker.js）
 ```
 Checkout → Node.js 20 → npm ci → 设置版本号
 → npm test → npm run check → npm run bundle
-→ 校验 _worker.js 存在且含版本标记
-→ 上传 artifact → 发布 GitHub Release（含 _worker.js）
+→ 校验 _worker-transmission.js 与 _worker-admin.js 存在且含版本标记
+→ 上传两个 artifact → 发布 GitHub Release（含两个 _worker-*.js）
 ```
 
-> 工作流**不自动部署**到 Cloudflare。需要手动下载 Release 中的 `_worker.js` 上传到 Worker。
+> 工作流**不自动部署**到 Cloudflare。需要手动下载 Release 中的 `_worker-transmission.js` 与 `_worker-admin.js`，分别上传到各自的 Worker（唯一的部署方式：JS 文件上传）。
 
 ### 版本规则
 
 - 初始版本 `3.0.0`，语义化版本
 - 版本号写在 `package.json` 的 `version` 字段
-- 产物 `_worker.js` 顶部保留 `// edgetunnel-core {version}` 标记
+- 两个产物顶部各保留各自版本标记：`// edgetunnel-transmission {version}`、`// edgetunnel-admin {version}`
 
 ---
 

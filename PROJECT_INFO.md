@@ -9,11 +9,11 @@
 - 出站：Cloudflare Sockets 直连 TCP、UDP/53 经 DNS-over-TCP
 - 控制面：D1 用户、PBKDF2 密码、随机 Session、角色、禁用、封禁、配额、全局配置
 - 订阅：协议 × 传输 × HOSTS 节点展开，支持随机路径、0-RTT、TLS 分片参数和 ECH 参数
-- 发布：esbuild 单文件 `_worker.js`，GitHub Actions artifact 与 Release
+- 发布：esbuild 打包为两个单文件 `_worker-transmission.js` 与 `_worker-admin.js`，GitHub Actions artifact 与 Release
 
 ## 模块边界
 
-`transport-v2` 只把 HTTP/WebSocket 请求转换成字节流；`protocol-v2` 只解析首包；`admission` 只做 D1 准入；`connector` 只建立出站；`subscription` 只生成 URI。组合只发生在 `src/index.js` 和 `src/proxy/pipeline.js`。
+`transport-v2` 只把 HTTP/WebSocket 请求转换成字节流；`protocol-v2` 只解析首包；`admission` 只做 D1 准入；`connector` 只建立出站；`subscription` 只生成 URI。组合只发生在两个入口 `src/index-transmission.js`、`src/index-admin.js` 和 `src/proxy/pipeline.js`。`src/index.js` 为旧单入口，仅作行为对照，不再用于打包。
 
 数据流路径固定为：
 
@@ -27,9 +27,11 @@
 
 1. 创建新的 D1 数据库并执行 `migrations/0001_initial.sql`。
 2. 参考 `wrangler.example.toml` 绑定数据库为 `DB`。
-3. 首次启动前设置 `BOOTSTRAP_ADMIN_USER` 与 `BOOTSTRAP_ADMIN_PASSWORD` secret。
+3. 首次启动前在管理层 Worker 设置 `BOOTSTRAP_ADMIN_USER` 与 `BOOTSTRAP_ADMIN_PASSWORD` secret。
 4. 首次请求会在空数据库创建管理员。创建成功后可删除两个 bootstrap secret。
-5. 执行 `npm ci && npm test && npm run build`，上传 `_worker.js`。
+5. 执行 `npm ci && npm test && npm run bundle`，得到 `_worker-transmission.js` 与 `_worker-admin.js`，分别上传到各自的 Cloudflare Worker（唯一的部署方式：JS 文件上传）。
+
+两个 Worker 的变量不同：传输层只需 `DB`/`KV`/`QUOTA_DO`（导出 `QuotaDO` 类）；管理层额外用 `ADMIN_BUCKET`、`BOOTSTRAP_*`、`TURNSTILE_*`，并通过 `QUOTA_DO` 跨 Worker 调用传输层的 DO。详见 README「环境变量与 Secrets」。
 
 密码不会明文存储或放入 URL。控制面使用 `HttpOnly; Secure; SameSite=Strict` Cookie；VLESS UUID 和 Trojan secret 与网页登录密码互相独立。
 

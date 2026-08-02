@@ -14,6 +14,7 @@ import { jsonResponse, textResponse } from '../utils/http.js';
 import { identifyOperator } from '../net/operator.js';
 import { getCIDRList } from '../net/cidr.js';
 import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName } from '../net/ip-pool.js';
+import { getTurnstileSiteKey } from '../utils/turnstile.js';
 
 export function createApiRouter({ users, sessions }) {
   const governance = createGovernanceService;
@@ -25,12 +26,18 @@ export function createApiRouter({ users, sessions }) {
       const current = await auth.resolve(request);
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const body = await readBody(request);
-        const result = await auth.login(body.username, body.password, loginFingerprint(request, body.username));
+        const turnstileToken = body.turnstileToken || request.headers.get('x-turnstile-token') || '';
+        const result = await auth.login(body.username, body.password, loginFingerprint(request, body.username), turnstileToken, request);
         return jsonResponse({ ok: true, user: publicUser(result.user) }, 200, { 'set-cookie': result.session.cookie });
       }
       if (url.pathname === '/api/auth/register' && request.method === 'POST') {
         const body = await readBody(request);
+        const ip = request.headers.get('cf-connecting-ip') || '';
+        const turnstileToken = body.turnstileToken || request.headers.get('x-turnstile-token') || '';
+        const loginAttempts = createLoginAttemptService(env);
+        await loginAttempts.checkRegister(ip, turnstileToken, request);
         const user = await userService.create({ ...body, role: 'user' });
+        await loginAttempts.recordRegister(ip);
         return jsonResponse({ ok: true, user: publicUser(user) }, 201);
       }
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') return jsonResponse({ ok: true }, 200, { 'set-cookie': await auth.logout(request) });
@@ -51,7 +58,14 @@ export function createApiRouter({ users, sessions }) {
       if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       throw new AppError('NOT_FOUND', 404);
-    } catch (error) { const appError = asAppError(error); return jsonResponse({ ok: false, error: appError.code, message: appError.message, ...(appError.details ? { details: appError.details } : {}) }, appError.status); }
+    } catch (error) {
+      const appError = asAppError(error);
+      const response = { ok: false, error: appError.code, message: appError.message, ...(appError.details ? { details: appError.details } : {}) };
+      if (appError.code === 'REQUIRE_CAPTCHA') {
+        response.turnstileSiteKey = getTurnstileSiteKey(env);
+      }
+      return jsonResponse(response, appError.status);
+    }
   };
 }
 
@@ -181,9 +195,9 @@ function randomPathSegment() {
 }
 
 function loginFingerprint(request, username) {
-  const address = request.headers.get('cf-connecting-ip') || 'unknown';
+  const ip = request.headers.get('cf-connecting-ip') || '';
   const normalized = String(username || '').trim().toLowerCase();
-  return `${address}:${normalized}`;
+  return { ip, username: normalized };
 }
 
 async function validateProxyConfig(body, request) {

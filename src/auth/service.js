@@ -5,9 +5,9 @@ const DUMMY_HASH = 'pbkdf2-sha256$210000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAA
 
 export function createAuthService(users, sessions, loginAttempts) {
   return {
-    async login(username, password, fingerprint) {
+    async login(username, password, fingerprint, turnstileToken = '', request = null) {
       const normalized = String(username || '').trim().toLowerCase();
-      if (loginAttempts) await loginAttempts.check(fingerprint);
+      if (loginAttempts) await loginAttempts.check(fingerprint, turnstileToken, request);
       const user = await users.getByUsername(normalized);
       const valid = await verifyPassword(password, user?.passwordHash || DUMMY_HASH) && Boolean(user);
       if (!valid) {

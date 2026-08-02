@@ -46,7 +46,7 @@ export function createApiRouter({ users, sessions }) {
         const usage = await fetchUsage(env, u.userID);
         return jsonResponse({ ok: true, user: { ...publicUser(u), usage } });
       }
-      if (url.pathname === '/api/admin/users' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, users: await userService.list() }); }
+      if (url.pathname === '/api/admin/users' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, users: await userService.listWithUsage() }); }
       if (url.pathname === '/api/admin/users' && request.method === 'POST') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201); }
       const match = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i);
       if (match && request.method === 'PATCH') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.update(match[1], await readBody(request), current) }); }

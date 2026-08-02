@@ -1,6 +1,7 @@
 import { hashPassword } from '../auth/password.js';
 import { AppError } from '../core/errors.js';
 import { normalizeUsername } from '../utils/crypto.js';
+import { createUsageRepository } from '../usage/repository.js';
 import { publicUser } from './repository.js';
 
 export function createUserService(repository, env) {
@@ -53,6 +54,26 @@ export function createUserService(repository, env) {
     },
     async get(userID) { return publicUser(await repository.getByID(userID)); },
     async list() { return Promise.all((await repository.list()).map(publicUser)); },
+    async listWithUsage() {
+      const usageRepo = createUsageRepository(env);
+      const users = await repository.list();
+      return Promise.all(users.map(async (user) => {
+        const usage = await usageRepo.get(user.userID);
+        const quota = Number(user.quotaBytes || 0);
+        const total = Number(usage.total || 0);
+        return {
+          ...publicUser(user),
+          usage: {
+            upload: Number(usage.upload || 0),
+            download: Number(usage.download || 0),
+            total,
+            quota,
+            remaining: quota > 0 ? Math.max(0, quota - total) : 0,
+            updatedAt: usage.updatedAt || null,
+          },
+        };
+      }));
+    },
     async delete(userID, actor) {
       if (actor?.role !== 'admin') throw new AppError('ADMIN_REQUIRED', 403);
       if (actor?.userID === userID) throw new AppError('SELF_DELETE_FORBIDDEN', 400);

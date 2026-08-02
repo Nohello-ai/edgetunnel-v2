@@ -1,0 +1,24 @@
+name = "edgetunnel-admin"
+main = "_worker-admin.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1
+[[d1_databases]]
+binding = "DB"
+database_name = "su"
+database_id = "cc8227a6-ca14-4d05-98c2-15a128c4838d"
+
+# KV（与传输层共用）
+[[kv_namespaces]]
+binding = "KV"
+id = "4df203259c104b70ae5713e72882bda3"
+
+# Service Binding → 传输层
+[[services]]
+binding = "TRANSMISSION"
+service = "edgetunnel-transmission"
+
+# 变量
+[vars]
+CORS_ORIGINS = "https://nohello-ai.github.io"

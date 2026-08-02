@@ -1,0 +1,19 @@
+name = "edgetunnel-transmission"
+main = "_worker-transmission.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Durable Object：传输层自己 export QuotaDO 类
+[[durable_objects.bindings]]
+name = "QUOTA_DO"
+class_name = "QuotaDO"
+
+# KV（与管理层共用）
+[[kv_namespaces]]
+binding = "KV"
+id = "4df203259c104b70ae5713e72882bda3"
+
+# Service Binding → 管理层
+[[services]]
+binding = "USER_ADMIN"
+service = "edgetunnel-admin"

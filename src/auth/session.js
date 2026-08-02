@@ -10,7 +10,7 @@ export function createSessionService(env, users, options = {}) {
       const expires = new Date(now.getTime() + ttlSeconds * 1000);
       await env.DB.prepare('INSERT INTO sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)')
         .bind(tokenHash, userID, expires.toISOString(), now.toISOString()).run();
-      return { token, cookie: `${COOKIE}=${token}; Path=/; Max-Age=${ttlSeconds}; HttpOnly; Secure; SameSite=Strict` };
+      return { token, cookie: `${COOKIE}=${token}; Path=/; Max-Age=${ttlSeconds}; HttpOnly; Secure; SameSite=None` };
     },
     async resolve(request) {
       const token = readCookie(request.headers.get('cookie'), COOKIE);
@@ -31,7 +31,7 @@ export function createSessionService(env, users, options = {}) {
     async revoke(request) {
       const token = readCookie(request.headers.get('cookie'), COOKIE);
       if (token) await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ?').bind(new Date().toISOString(), await digest(token)).run();
-      return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+      return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`;
     },
   };
 }

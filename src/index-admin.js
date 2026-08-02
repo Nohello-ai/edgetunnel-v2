@@ -31,19 +31,30 @@ import { createSessionService } from './auth/session.js';
 import { asAppError } from './core/errors.js';
 import { createUserRepository } from './users/repository.js';
 import { jsonResponse, textResponse } from './utils/http.js';
+import { handleOptions, withCorsHeaders } from './utils/cors.js';
 
 const VERSION = typeof __EDGETUNNEL_VERSION__ === 'string' ? __EDGETUNNEL_VERSION__ : '3.0.0';
 
 export default {
   async fetch(request, env, ctx) {
-    if (!env?.DB) return jsonResponse({ ok: false, error: 'DB_BINDING_REQUIRED' }, 500);
+    // 跨域预检：未配置允许来源时返回 403
+    if (request.method === 'OPTIONS') {
+      return handleOptions(request, env) || new Response(null, { status: 403 });
+    }
+
+    let response;
+    if (!env?.DB) {
+      response = jsonResponse({ ok: false, error: 'DB_BINDING_REQUIRED' }, 500);
+      return withCorsHeaders(response, request, env);
+    }
 
     try {
       const url = new URL(request.url);
 
       // 版本探测
       if (url.pathname === '/version' && request.method === 'GET') {
-        return jsonResponse({ name: 'edgetunnel-admin', version: VERSION });
+        response = jsonResponse({ name: 'edgetunnel-admin', version: VERSION });
+        return withCorsHeaders(response, request, env);
       }
 
       // 从 R2 提供静态文件（管理面板）
@@ -57,7 +68,8 @@ export default {
             const headers = new Headers();
             headers.set('content-type', contentType(key) || 'application/octet-stream');
             headers.set('cache-control', 'public, max-age=3600');
-            return new Response(obj.body, { headers });
+            response = new Response(obj.body, { headers });
+            return withCorsHeaders(response, request, env);
           }
         }
       }
@@ -66,10 +78,12 @@ export default {
       const users = createUserRepository(env);
       await bootstrapAdmin(env, users);
       const sessions = createSessionService(env, users);
-      return createApiRouter({ users, sessions })(request, env);
+      response = await createApiRouter({ users, sessions })(request, env);
+      return withCorsHeaders(response, request, env);
     } catch (error) {
       const appError = asAppError(error);
-      return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
+      response = jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
+      return withCorsHeaders(response, request, env);
     }
   },
 };

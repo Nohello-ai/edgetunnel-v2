@@ -23,7 +23,8 @@ export function createUserService(repository, env) {
         throw error;
       }
       // 同步初始配额到 DO(DO 冷启动时会从 D1 兜底,这里主动推送避免首次请求延迟)
-      await syncQuotaToDO(env, user.userID, user.quotaBytes);
+      // fire-and-forget：D1 已写入是真相源，传输层通知 best-effort
+      void syncQuotaToDO(env, user.userID, user.quotaBytes);
       return publicUser(user);
     },
     async update(userID, fields, actor) {
@@ -44,9 +45,10 @@ export function createUserService(repository, env) {
       if (!user) throw new AppError('USER_NOT_FOUND', 404);
       if ('disabled' in allowed || 'role' in allowed || 'passwordHash' in allowed) await repository.revokeSessions(userID);
       // 配额变更 → 同步到 DO(续费/调整额度)
-      if ('quotaBytes' in allowed) await syncQuotaToDO(env, userID, allowed.quotaBytes);
+      // fire-and-forget：D1 已写入是真相源，传输层通知 best-effort
+      if ('quotaBytes' in allowed) void syncQuotaToDO(env, userID, allowed.quotaBytes);
       // 禁用用户 → 递增 resetVersion,活跃连接下次上报时被拒(2-3秒内断干净)
-      if (allowed.disabled === true) await resetUuidInDO(env, userID);
+      if (allowed.disabled === true) void resetUuidInDO(env, userID);
       return publicUser(user);
     },
     async get(userID) { return publicUser(await repository.getByID(userID)); },

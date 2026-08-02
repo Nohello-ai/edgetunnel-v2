@@ -9,7 +9,8 @@ export function createGovernanceService(env) {
       await env.DB.prepare(`INSERT INTO bans (user_id,reason,until,created_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason,until=excluded.until,created_at=excluded.created_at`)
         .bind(userID, reason, until, createdAt).run();
       // 递增 resetVersion → 活跃连接下次上报时被拒(2-3秒内断干净)
-      await resetUuidInDO(env, userID);
+      // fire-and-forget：D1 已写入是真相源，传输层通知 best-effort（失败时 admit 层仍会拦新连接）
+      void resetUuidInDO(env, userID);
       return { userID, reason, until, createdAt };
     },
     async unban(userID) {

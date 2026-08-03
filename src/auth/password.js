@@ -1,7 +1,7 @@
 import { AppError } from '../core/errors.js';
 
 const encoder = new TextEncoder();
-const ITERATIONS = 210000;
+const ITERATIONS = 100000;
 
 export async function hashPassword(password, options = {}) {
   validatePassword(password);

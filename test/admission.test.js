@@ -7,29 +7,30 @@ const USER_ID = '123e4567-e89b-42d3-a456-426614174000';
 test('parseDataFlowRoute accepts only canonical transport paths', () => {
   assert.deepEqual(
     parseDataFlowRoute(new URL(`https://example.com/ws/${USER_ID}/vless/random`)),
-    { transport: 'websocket', userID: USER_ID, protocol: 'vless', suffix: ['random'] },
+    { transport: 'websocket', userID: USER_ID },
+  );
+  assert.deepEqual(
+    parseDataFlowRoute(new URL(`https://example.com/ws/${USER_ID}`)),
+    { transport: 'websocket', userID: USER_ID },
   );
   assert.equal(parseDataFlowRoute(new URL(`https://example.com/other/${USER_ID}`)), null);
   assert.equal(parseDataFlowRoute(new URL('https://example.com/ws/not-a-uuid')), null);
-  assert.equal(parseDataFlowRoute(new URL(`https://example.com/ws/${USER_ID}`)), null);
 });
 
-test('admission selects only the protocol declared by the route', async () => {
-  const service = createService({ protocols: ['vless', 'trojan'] });
-  const session = await service.admit({ transport: 'websocket', userID: USER_ID, protocol: 'trojan' });
-  assert.equal(session.protocol, 'trojan');
-  await assert.rejects(
-    createService({ protocols: ['vless'] }).admit({ transport: 'websocket', userID: USER_ID, protocol: 'trojan' }),
-    { code: 'PROTOCOL_DISABLED' },
-  );
+test('admission auto-detects protocol from data stream', async () => {
+  const service = createService();
+  const session = await service.admit({ transport: 'websocket', userID: USER_ID });
+  assert.equal(session.protocol, '');
+  assert.equal(session.userID, USER_ID);
+  assert.equal(session.transport, 'websocket');
 });
 
 test('admission checks user governance before returning a session', async () => {
   const service = createService();
-  const session = await service.admit({ transport: 'grpc', userID: USER_ID, protocol: 'vless' });
+  const session = await service.admit({ transport: 'grpc', userID: USER_ID });
 
   assert.equal(session.userID, USER_ID);
-  assert.equal(session.protocol, 'vless');
+  assert.equal(session.protocol, '');
   assert.equal(session.transport, 'grpc');
   assert.equal(session.quotaBytes, 1024);
 });
@@ -42,7 +43,7 @@ test('admission rejects disabled, banned, exhausted, and disabled transport', as
 });
 
 function route() {
-  return { transport: 'grpc', userID: USER_ID, protocol: 'vless' };
+  return { transport: 'grpc', userID: USER_ID };
 }
 
 function createService(options = {}) {

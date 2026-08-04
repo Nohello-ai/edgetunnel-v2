@@ -13,16 +13,27 @@ import { resolveDnsOverHttps } from '../dns/service.js';
 const DEFAULT_DOH = 'https://cloudflare-dns.com/dns-query';
 
 /**
+ * auto/空值使用的默认反代域名模板（沿用 edgetunnel-v3 的 ProxyIP 获取方式）：
+ * 请求到达的 Cloudflare 机房 (colo) 前缀 + 公共反代域名服务。
+ */
+function defaultProxyIPDomain(colo) {
+  return `${String(colo || 'SJC').toLowerCase().replace(/^\[|\]$/g, '')}.proxyip.cmliussss.net`;
+}
+
+/**
  * 解析 ProxyIP 地址，返回 IP:port 数组。
  *
- * @param {string} proxyIP - ProxyIP 地址
+ * @param {string} proxyIP - ProxyIP 地址（'auto' 或空时使用默认反代域名）
  * @param {object} [options]
  * @param {string} [options.doh] - DoH 服务器
+ * @param {string} [options.colo] - Cloudflare 机房代码，用于默认反代域名
  * @returns {Promise<Array<{ hostname: string, port: number }>>}
  */
 export async function resolveProxyIP(proxyIP, options = {}) {
-  const input = String(proxyIP || '').trim().toLowerCase();
-  if (!input) return [];
+  let input = String(proxyIP || '').trim().toLowerCase();
+  if (!input || input === 'auto' || input === 'none') {
+    input = defaultProxyIPDomain(options.colo);
+  }
 
   const doh = options.doh || DEFAULT_DOH;
   let address, port = 443;

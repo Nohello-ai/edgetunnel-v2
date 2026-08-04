@@ -88,12 +88,12 @@ function normalizeHosts(value) {
 function normalizeProxyGroup(value, fallback) {
   const config = normalizeObject(value);
   const base = normalizeObject(fallback);
-  const MODES = new Set(['', 'proxyip', 'socks5', 'auto']);
+  const MODES = new Set(['', 'proxyip', 'socks5', 'http', 'auto']);
   const mode = normalizeEnum(config.模式 ?? base.模式, MODES, '');
   return {
     模式: mode,
     PROXYIP: mode ? String(config.PROXYIP || base.PROXYIP || 'auto') : '',
-    SOCKS5: mode === 'socks5' || mode === 'auto' ? normalizeSocks5Config(config.SOCKS5, base.SOCKS5) : { 启用: null, 全局: false, 账号: '', 白名单: [] },
+    SOCKS5: mode === 'socks5' || mode === 'http' ? normalizeSocks5Config(config.SOCKS5, base.SOCKS5) : { 启用: null, 全局: false, 账号: '', 白名单: [] },
   };
 }
 

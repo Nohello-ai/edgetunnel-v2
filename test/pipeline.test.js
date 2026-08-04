@@ -14,7 +14,7 @@ test('pipeline composes VLESS parser, transport, connector, and usage', async ()
   const counts = { upload: 0, download: 0 };
   await runPipeline({
     transport,
-    session: { protocol: 'vless', userID: UUID, user: { trojanSecret: '' } },
+    session: { protocol: 'vless', userID: UUID, user: { userID: UUID, trojanSecret: '' } },
     connector: { connect: () => socket },
     meter: { addUpload: (n) => counts.upload += n, addDownload: (n) => counts.download += n },
   });
@@ -44,7 +44,7 @@ test('pipeline finishes when remote TCP closes before client transport', async (
 
   await runPipeline({
     transport,
-    session: { protocol: 'vless', userID: UUID, user: { trojanSecret: '' } },
+    session: { protocol: 'vless', userID: UUID, user: { userID: UUID, trojanSecret: '' } },
     connector: { connect: () => socket },
     meter: { addUpload() {}, addDownload() {} },
   });
@@ -58,7 +58,7 @@ test('pipeline throws TCP_CONNECT_TIMEOUT when socket hangs', async () => {
   const input = new ReadableStream({ start(c) { c.enqueue(packet); c.close(); } });
   const transport = { readable: input, write: async () => {}, close: async () => {} };
   const socket = {
-    opened: new Promise(() => {}), // 永不 resolve
+    opened: new Promise(() => {}),
     writable: new WritableStream({ write() {} }),
     readable: new ReadableStream({ start(c) { c.close(); } }),
     close() {},
@@ -67,7 +67,7 @@ test('pipeline throws TCP_CONNECT_TIMEOUT when socket hangs', async () => {
   await assert.rejects(
     () => runPipeline({
       transport,
-      session: { protocol: 'vless', userID: UUID, user: { trojanSecret: '' } },
+      session: { protocol: 'vless', userID: UUID, user: { userID: UUID, trojanSecret: '' } },
       connector: { connect: () => socket },
       meter: { addUpload() {}, addDownload() {} },
     }),

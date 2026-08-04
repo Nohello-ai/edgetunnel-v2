@@ -22,11 +22,15 @@ export function createUsageMeter({ userID, quotaDO, userAdmin, ctx, checkThresho
       const stub = quotaDO.get(id);
       const resp = await stub.fetch('https://do/status');
       const result = await resp.json();
+      console.log(`[meter] checkStop: stopVersion=${result.stopVersion} expected=${stopVersion}`);
       if (result.stopVersion > stopVersion) {
+        console.log('[meter] checkStop: STOPPED!');
         stopped = true;
         if (onLimit) try { onLimit(new UsageLimitError()); } catch {}
       }
-    } catch {}
+    } catch (err) {
+      console.error(`[meter] checkStop error: ${err.message}`);
+    }
   };
 
   const report = async () => {
@@ -37,15 +41,21 @@ export function createUsageMeter({ userID, quotaDO, userAdmin, ctx, checkThresho
         const download = pendingDownload;
         pendingUpload = 0;
         pendingDownload = 0;
+        console.log(`[meter] report: upload=${upload} download=${download}`);
         try {
-          if (!userAdmin) break;
+          if (!userAdmin) {
+            console.log('[meter] report: no userAdmin, break');
+            break;
+          }
           const resp = await userAdmin.fetch('https://user-admin/internal/report', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ userId: userID, upload, download }),
           });
           const result = await resp.json().catch(() => ({}));
+          console.log(`[meter] report response: status=${resp.status} allowed=${result.allowed}`);
           if (!result.allowed) {
+            console.log('[meter] report: not allowed, stopping');
             stopped = true;
             if (quotaDO) {
               try {
@@ -58,6 +68,7 @@ export function createUsageMeter({ userID, quotaDO, userAdmin, ctx, checkThresho
             throw new UsageLimitError();
           }
         } catch (error) {
+          console.error(`[meter] report error: ${error.constructor?.name} ${error.message}`);
           if (error instanceof UsageLimitError) throw error;
           pendingUpload += upload;
           pendingDownload += download;
@@ -71,11 +82,15 @@ export function createUsageMeter({ userID, quotaDO, userAdmin, ctx, checkThresho
   };
 
   const add = (direction, bytes) => {
-    if (stopped) return;
+    if (stopped) {
+      console.log(`[meter] add ${direction} ${bytes}b - stopped, ignored`);
+      return;
+    }
     const value = validBytes(bytes);
     counted += value;
     if (direction === 'upload') pendingUpload += value;
     else pendingDownload += value;
+    if (counted % (256 * 1024) === 0) console.log(`[meter] add ${direction} ${value}b counted=${counted} pendingU=${pendingUpload} pendingD=${pendingDownload}`);
 
     if (quotaDO && counted - lastCheck >= checkThreshold) {
       lastCheck = counted;

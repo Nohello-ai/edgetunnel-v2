@@ -11,7 +11,7 @@ export function createUserService(repository, env) {
       if (!/^[a-z0-9_.-]{3,64}$/.test(username)) throw new AppError('USERNAME_INVALID', 400);
       const now = new Date().toISOString();
       const user = {
-        userID: crypto.randomUUID(), username, passwordHash: await hashPassword(input.password),
+        userID: input.userID || crypto.randomUUID(), username, passwordHash: await hashPassword(input.password),
         role: input.role === 'admin' ? 'admin' : 'user', disabled: false,
         quotaBytes: validQuota(input.quotaBytes), trojanSecret: randomToken(32), settings: input.settings || {},
         createdAt: now, updatedAt: now,

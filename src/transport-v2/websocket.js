@@ -2,17 +2,23 @@ import { AppError } from '../core/errors.js';
 import { DEFAULT_TRANSPORT_LIMITS } from './limits.js';
 
 export function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
+  console.log('[ws:1] openWebSocketTransport: checking request...');
   if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+    console.log(`[ws:1] invalid request: method=${request.method} upgrade=${request.headers.get('upgrade')}`);
     throw new AppError('INVALID_WEBSOCKET_REQUEST', 400);
   }
+  console.log('[ws:1] request valid, getting WebSocketPair...');
   const Pair = runtime.WebSocketPair;
   const Resp = runtime.Response || globalThis.Response;
+  console.log(`[ws:1] WebSocketPair=${typeof Pair} Response=${typeof Resp}`);
   if (!Pair || !Resp) throw new AppError('WEBSOCKET_UNAVAILABLE', 501);
+  console.log('[ws:1] creating WebSocketPair...');
   const pair = new Pair();
   const client = pair[0];
   const server = pair[1];
   server.binaryType = 'arraybuffer';
   server.accept();
+  console.log('[ws:1] WebSocketPair created and accepted');
 
   const maxFrameBytes = Math.max(1, Number(limits?.maxFrameBytes) || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
   const maxQueuedBytes = Math.max(1024, Number(limits?.maxQueuedBytes) || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);

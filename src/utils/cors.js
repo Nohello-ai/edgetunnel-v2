@@ -8,10 +8,9 @@
  */
 
 export function getAllowedOrigin(request, env) {
-  const raw = env?.CORS_ORIGINS;
-  if (!raw) return null;
   const origin = request.headers.get('origin');
   if (!origin) return null;
+  const raw = env?.CORS_ORIGINS || 'https://nohello-ai.github.io';
   const allowed = String(raw)
     .split(/[\s,]+/)
     .map((s) => s.trim())

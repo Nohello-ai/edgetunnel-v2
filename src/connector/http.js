@@ -39,9 +39,9 @@ export async function httpConnect(socket, target, credentials, isTLS = false) {
       }
     }
   } catch (err) {
-    writer.releaseLock().catch(() => {});
-    reader.releaseLock().catch(() => {});
-    socket.close().catch(() => {});
+    try { writer.releaseLock(); } catch {}
+    try { reader.releaseLock(); } catch {}
+    try { socket.close(); } catch {}
     throw err;
   }
 }

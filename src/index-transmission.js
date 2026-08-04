@@ -47,48 +47,78 @@ export default {
 
     try {
       const url = new URL(request.url);
+      console.log(`[1] fetch entry: method=${request.method} path=${url.pathname} upgrade=${request.headers.get('upgrade')}`);
+
+      // 调试端点
+      if (url.pathname === '/debug' && request.method === 'GET') {
+        const headers = {};
+        for (const [k, v] of request.headers) headers[k] = v;
+        return jsonResponse({ path: url.pathname, method: request.method, headers, cfColo: request.cf?.colo || '' });
+      }
 
       // 版本探测
       if (url.pathname === '/version' && request.method === 'GET') {
+        console.log('[2] version endpoint hit');
         return jsonResponse({ name: 'edgetunnel-transmission', version: VERSION });
       }
 
       // 内部 Service Binding 端点（管理层 → 传输层）
       if (url.pathname === '/internal/stop' && request.method === 'POST') {
+        console.log('[2] internal/stop endpoint hit');
         return await handleInternalStop(request, env);
       }
       if (url.pathname === '/internal/update-quota' && request.method === 'POST') {
+        console.log('[2] internal/update-quota endpoint hit');
         return jsonResponse({ ok: true });
       }
 
       // 数据面：解析代理路由
+      console.log('[3] parsing data flow route...');
       const dataFlow = parseDataFlowRoute(url);
+      console.log(`[3] parseDataFlowRoute result: ${dataFlow ? JSON.stringify(dataFlow) : 'null'}`);
       if (!dataFlow || !matchesTransport(request, dataFlow.transport)) {
+        console.log('[3] route not matched, returning text response');
         return textResponse(`edgetunnel transmission ${VERSION} is running`);
       }
 
       // 准入控制（通过 Service Binding 调管理层）
+      console.log('[4] creating admission dependencies...');
       const dependencies = createAdmissionDependencies(env);
+      console.log(`[4] dependencies: userAdmin=${!!dependencies.userAdmin} quotaDO=${!!dependencies.quotaDO} config=${!!dependencies.config}`);
+      console.log('[5] calling admit()...');
       const session = await createAdmissionService(dependencies).admit(dataFlow);
+      console.log(`[5] admit() succeeded: userID=${session.userID} transport=${session.transport} quotaBytes=${session.quotaBytes}`);
 
       // 连接器装配
+      console.log('[6] assembling connector...');
+      const hasFetcher = !!request.fetcher;
+      console.log(`[6] request.fetcher available: ${hasFetcher}`);
       const directConnect = createDirectConnector(request.fetcher?.connect?.bind(request.fetcher));
+      console.log('[6] loading global config from KV...');
       const config = normalizeGlobalConfig(await getGlobalConfig(env));
-      const connector = config.反代?.模式
-        ? createFallbackConnector(directConnect, config.反代)
+      console.log(`[6] global config loaded: transport=${config.transport} protocol=${config.protocol} siteName=${config.siteName}`);
+      const hasProxy = config.反代?.模式;
+      console.log(`[6] proxy mode: ${hasProxy ? config.反代.模式 : 'none'}`);
+      const connector = hasProxy
+        ? createFallbackConnector(directConnect, config.反代, { colo: request.cf?.colo || '' })
         : directConnect;
+      console.log('[6] connector ready');
 
       // 启动数据流管道
-      return startDataFlowPipeline({
+      console.log('[7] starting data flow pipeline...');
+      const result = startDataFlowPipeline({
         request,
         session,
         connector,
         quotaDO: env.QUOTA_DO || null,
         userAdmin: env.USER_ADMIN || null,
         ctx,
-        runtime: config,
+        runtime: globalThis,
       });
+      console.log('[7] pipeline started, returning response');
+      return result;
     } catch (error) {
+      console.error(`[ERR] caught at fetch handler: ${error.constructor?.name || typeof error} code=${error.code} message=${error.message}`);
       const appError = asAppError(error);
       return jsonResponse({ ok: false, error: appError.code, message: appError.message }, appError.status);
     }

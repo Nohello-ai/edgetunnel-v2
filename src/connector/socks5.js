@@ -70,9 +70,9 @@ export async function socks5Connect(socket, target, credentials) {
     reader.releaseLock();
     return socket;
   } catch (err) {
-    writer.releaseLock().catch(() => {});
-    reader.releaseLock().catch(() => {});
-    socket.close().catch(() => {});
+    try { writer.releaseLock(); } catch {}
+    try { reader.releaseLock(); } catch {}
+    try { socket.close(); } catch {}
     throw err;
   }
 }

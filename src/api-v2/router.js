@@ -97,7 +97,7 @@ async function buildSubscription(env, user, request) {
   let nodes = generateNodeInputs({ protocols, transports, hosts: config.HOSTS, address: url.hostname, port: 443 });
   nodes = nodes.map((node) => {
     const prefix = node.transport === 'websocket' ? 'ws' : node.transport;
-    const params = normalizeNodeParams({ ...config.节点参数, path: `/${prefix}/${user.userID}/${node.protocol}` }, {
+    const params = normalizeNodeParams({ ...config.节点参数, path: `/${prefix}/${user.userID}` }, {
       randomPath: (path) => `${path}/${randomPathSegment()}`,
     });
     return { ...node, path: params.path, query: params.query };

@@ -15,6 +15,7 @@ import { identifyOperator } from '../net/operator.js';
 import { getCIDRList } from '../net/cidr.js';
 import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName } from '../net/ip-pool.js';
 import { getTurnstileSiteKey } from '../utils/turnstile.js';
+import { isValidUuidV4, sha224Text } from '../utils/crypto.js';
 
 export function createApiRouter({ users, sessions }) {
   const governance = createGovernanceService;
@@ -57,6 +58,18 @@ export function createApiRouter({ users, sessions }) {
       if (url.pathname === '/api/admin/config' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
       if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
+      // 免登录订阅:/sub?uuid=X&token=Y(token = sha224(uuid:hostname),客户端直接导入)
+      if (url.pathname === '/sub' && request.method === 'GET') {
+        const subUser = await resolveSubscriptionUser(url, users);
+        if (!subUser) throw new AppError('INVALID_SUBSCRIPTION_TOKEN', 401);
+        return textResponse(await buildSubscription(env, subUser, request));
+      }
+      // 当前用户的订阅链接(带 token,复制给客户端导入)
+      if (url.pathname === '/api/users/me/subscription-url' && request.method === 'GET') {
+        const me = requireUser(current);
+        const token = subscriptionToken(me.userID, url.hostname);
+        return jsonResponse({ ok: true, url: `${url.protocol}//${url.host}/sub?uuid=${me.userID}&token=${token}` });
+      }
       throw new AppError('NOT_FOUND', 404);
     } catch (error) {
       const appError = asAppError(error);
@@ -109,10 +122,14 @@ async function buildSubscription(env, user, request) {
   if (optIP?.模式) {
     const replacements = await resolveIPReplacements(optIP, request, nodeCount);
     if (replacements && replacements.length > 0) {
-      nodes = nodes.map((node, i) => {
-        const rep = replacements[i % replacements.length];
-        return { ...node, address: rep.address, port: rep.port };
-      });
+      // 每个优选 IP 生成一个节点(像 v3 一样输出多个优选节点),而不是循环替换
+      const expanded = [];
+      for (const node of nodes) {
+        for (const rep of replacements) {
+          expanded.push({ ...node, address: rep.address, port: rep.port });
+        }
+      }
+      nodes = expanded;
     }
   }
 
@@ -183,6 +200,22 @@ async function resolveIPReplacements(optIP, request, nodeCount = 16) {
 function randomPathSegment() {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+/** 订阅 token:sha224(userID:hostname),确定性生成,免登录订阅时重算校验 */
+function subscriptionToken(userID, hostname) {
+  return sha224Text(`${userID}:${hostname}`);
+}
+
+/** 免登录订阅鉴权:校验 uuid + token,返回用户(含 trojanSecret)或 null */
+async function resolveSubscriptionUser(url, users) {
+  const userID = String(url.searchParams.get('uuid') || '').toLowerCase();
+  const token = String(url.searchParams.get('token') || '');
+  if (!isValidUuidV4(userID) || !token) return null;
+  const user = await users.getByID(userID);
+  if (!user || user.disabled) return null;
+  if (subscriptionToken(userID, url.hostname) !== token) return null;
+  return user;
 }
 
 function loginFingerprint(request, username) {

@@ -1,6 +1,13 @@
 import { AppError } from '../core/errors.js';
 import { DEFAULT_TRANSPORT_LIMITS } from './limits.js';
 
+/**
+ * WebSocket 传输。
+ *
+ * runtime 参数仅用于测试注入(mock WebSocketPair/Response),默认取全局环境。
+ * 生产调用链(registry → 本函数)不再传递 runtime,彻底避免把配置对象误当
+ * 运行时导致 WS 一律 501 的问题。
+ */
 export function openWebSocketTransport(request, limits = {}, runtime = globalThis) {
   if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
     throw new AppError('INVALID_WEBSOCKET_REQUEST', 400);
@@ -8,50 +15,53 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
   const Pair = runtime.WebSocketPair;
   const Resp = runtime.Response || globalThis.Response;
   if (!Pair || !Resp) throw new AppError('WEBSOCKET_UNAVAILABLE', 501);
+
+  const maxFrameBytes = Math.max(1, Number(limits?.maxFrameBytes) || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
+  const maxQueuedBytes = Math.max(1024, Number(limits?.maxQueuedBytes) || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
+  const maxQueueSize = Math.max(16, Number(limits?.maxQueueSize) || DEFAULT_TRANSPORT_LIMITS.maxQueueSize);
+
   const pair = new Pair();
   const client = pair[0];
   const server = pair[1];
   server.binaryType = 'arraybuffer';
   server.accept();
 
-  const maxFrameBytes = Math.max(1, Number(limits?.maxFrameBytes) || DEFAULT_TRANSPORT_LIMITS.maxFrameBytes);
-  const maxQueuedBytes = Math.max(1024, Number(limits?.maxQueuedBytes) || DEFAULT_TRANSPORT_LIMITS.maxQueuedBytes);
-  const maxQueueSize = Math.max(16, Number(limits?.maxQueueSize) || DEFAULT_TRANSPORT_LIMITS.maxQueueSize);
   const queue = [];
   let queuedBytes = 0;
   let controller;
   let closed = false;
+
   const readable = new ReadableStream({
     start(value) { controller = value; },
     pull() {
       const chunk = queue.shift();
-      if (chunk) {
-        queuedBytes -= chunk.byteLength;
-        if (queuedBytes < 0) queuedBytes = 0;
-        try { controller.enqueue(chunk); } catch {}
-      }
+      if (!chunk) return;
+      queuedBytes -= chunk.byteLength;
+      if (queuedBytes < 0) queuedBytes = 0;
+      try { controller.enqueue(chunk); } catch {}
     },
     cancel() { try { server.close(1000, 'cancelled'); } catch {} },
   });
+
   server.addEventListener('message', async (event) => {
     if (closed) return;
     if (typeof event.data === 'string') {
-      controller.error(new AppError('WEBSOCKET_TEXT_UNSUPPORTED', 400));
-      try { server.close(1003, 'binary only'); } catch {}
+      fail(new AppError('WEBSOCKET_TEXT_UNSUPPORTED', 400), 1003, 'binary only');
       return;
     }
     const chunk = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : toBytes(event.data);
     if (chunk.byteLength > maxFrameBytes || queuedBytes + chunk.byteLength > maxQueuedBytes || queue.length >= maxQueueSize) {
-      closed = true;
-      try { controller.error(new AppError('WEBSOCKET_BUFFER_LIMIT', 413)); } catch {}
-      try { server.close(1009, 'message too large'); } catch {}
+      fail(new AppError('WEBSOCKET_BUFFER_LIMIT', 413), 1009, 'message too large');
       return;
     }
-    if (controller.desiredSize > 0 && queue.length === 0) controller.enqueue(chunk);
+    if (controller?.desiredSize > 0 && queue.length === 0) controller.enqueue(chunk);
     else { queue.push(chunk); queuedBytes += chunk.byteLength; }
   });
-  server.addEventListener('close', () => { closed = true; try { controller.close(); } catch {} });
-  server.addEventListener('error', (event) => { closed = true; try { controller.error(event.error || new Error('websocket error')); } catch {} });
+  server.addEventListener('close', () => { closed = true; try { controller?.close(); } catch {} });
+  server.addEventListener('error', (event) => {
+    closed = true;
+    try { controller?.error(event.error || new Error('websocket error')); } catch {}
+  });
 
   const earlyData = readEarlyData(request.headers.get('sec-websocket-protocol'));
   if (earlyData.bytes.byteLength && controller) controller.enqueue(earlyData.bytes);
@@ -74,6 +84,12 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
     }),
     metadata: Object.freeze({ name: 'websocket' }),
   };
+
+  function fail(error, code, reason) {
+    closed = true;
+    try { controller?.error(error); } catch {}
+    try { server.close(code, reason); } catch {}
+  }
 }
 
 function readEarlyData(header) {

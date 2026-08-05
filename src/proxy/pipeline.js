@@ -5,8 +5,8 @@ import { createDatagramCodec } from '../protocol-v2/datagram.js';
 import { openTransport } from '../transport-v2/registry.js';
 import { createUsageMeter } from '../usage/meter.js';
 
-export function startDataFlowPipeline({ request, session, connector, quotaDO, userAdmin, ctx, runtime }) {
-  const transport = openTransport(session.transport, request, undefined, runtime);
+export function startDataFlowPipeline({ request, session, connector, quotaDO, userAdmin, ctx }) {
+  const transport = openTransport(session.transport, request);
   const remaining = session.quotaBytes > 0 ? Math.max(0, session.quotaBytes - Number(session.usage.total || 0)) : 0;
   if (session.quotaBytes > 0 && remaining <= 0) {
     transport.close(new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403)).catch(() => {});

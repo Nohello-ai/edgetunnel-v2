@@ -1,6 +1,7 @@
 import { AppError } from '../core/errors.js';
 
-const VALID_XHTTP_TYPES = ['application/x-http'];
+// 与 index-transmission 的传输预检保持一致:兼容 octet-stream 客户端
+const VALID_XHTTP_TYPES = ['application/x-http', 'application/octet-stream'];
 
 export function openXhttpTransport(request) {
   const type = request.headers.get('content-type')?.toLowerCase() || '';

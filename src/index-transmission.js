@@ -72,13 +72,15 @@ export default {
       const session = await createAdmissionService(dependencies).admit(dataFlow);
 
       // 连接器装配
-      const directConnect = createDirectConnector(request.fetcher?.connect?.bind(request.fetcher));
+      const directConnect = createDirectConnector();
       const config = normalizeGlobalConfig(await getGlobalConfig(env));
       const connector = config.反代?.模式
         ? createFallbackConnector(directConnect, config.反代)
         : directConnect;
 
       // 启动数据流管道
+      // 注意:不向 pipeline/transport 传递 runtime——此前把 config 误传为 runtime,
+      // 导致 websocket.js 里 WebSocketPair 为 undefined,WS 节点握手一律 501。
       return startDataFlowPipeline({
         request,
         session,
@@ -86,7 +88,6 @@ export default {
         quotaDO: env.QUOTA_DO || null,
         userAdmin: env.USER_ADMIN || null,
         ctx,
-        runtime: config,
       });
     } catch (error) {
       const appError = asAppError(error);

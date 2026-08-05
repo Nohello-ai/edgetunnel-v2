@@ -71,8 +71,8 @@ export default {
       const dependencies = createAdmissionDependencies(env);
       const session = await createAdmissionService(dependencies).admit(dataFlow);
 
-      // 连接器装配
-      const directConnect = createDirectConnector();
+      // 连接器装配(用 request.fetcher.connect,规避 cloudflare:sockets 的风控限制)
+      const directConnect = createDirectConnector(request);
       const config = normalizeGlobalConfig(await getGlobalConfig(env));
       const connector = config.反代?.模式
         ? createFallbackConnector(directConnect, config.反代)

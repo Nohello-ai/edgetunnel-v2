@@ -21,7 +21,10 @@ export function startDataFlowPipeline({ request, session, connector, quotaDO, us
     onLimit: () => transport.close(new AppError('TRAFFIC_QUOTA_EXHAUSTED', 403)).catch(() => {}),
   });
   const task = runPipeline({ transport, session, connector, meter })
-    .catch(async (error) => { try { await transport.close(error); } catch {} })
+    .catch(async (error) => {
+      console.error('[pipeline] error:', error?.code, error?.message, error?.stack || '');
+      try { await transport.close(error); } catch {}
+    })
     .finally(() => meter.flush());
   ctx?.waitUntil?.(task);
   return transport.response;

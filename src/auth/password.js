@@ -1,7 +1,8 @@
 import { AppError } from '../core/errors.js';
 
 const encoder = new TextEncoder();
-const ITERATIONS = 210000;
+// Cloudflare Workers 运行时 PBKDF2 迭代上限为 100000,超出会抛错
+const ITERATIONS = 100000;
 
 export async function hashPassword(password, options = {}) {
   validatePassword(password);

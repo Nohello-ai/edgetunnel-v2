@@ -2,23 +2,29 @@ name = "edgetunnel-admin"
 main = "_worker-admin.js"
 compatibility_date = "2024-09-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "0e978a4a2e65977ade0b08f20019a498"
 
 # D1
 [[d1_databases]]
 binding = "DB"
-database_name = "su"
-database_id = "cc8227a6-ca14-4d05-98c2-15a128c4838d"
+database_name = "edgetunnel-db"
+database_id = "817a2267-ae43-4d1d-9fd7-ed8c351313aa"
 
-# KV（与传输层共用）
+# KV(与传输层共用)
 [[kv_namespaces]]
 binding = "KV"
-id = "4df203259c104b70ae5713e72882bda3"
+id = "d88602b1f59548b08e7b9ab36dc1c7a3"
 
 # Service Binding → 传输层
 [[services]]
 binding = "TRANSMISSION"
 service = "edgetunnel-transmission"
 
+# Routes:520 域名根域绑定管理层(数据面 /ws /grpc /xhttp 已被传输层更具体的 route 优先接管)
+routes = [
+  { pattern = "520-10086.cc.cd/*", zone_id = "c63469341e31b614badccea6338e2721" },
+]
+
 # 变量
 [vars]
-CORS_ORIGINS = "https://nohello-ai.github.io"
+CORS_ORIGINS = "https://520-10086.cc.cd"

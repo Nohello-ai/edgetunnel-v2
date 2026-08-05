@@ -56,17 +56,10 @@ export function createAdmissionService({ userAdmin, config, quotaDO }) {
         } catch {}
       }
 
-      // 从 KV 读取全局传输配置
-      const runtimeConfig = await config.getRuntime();
-      const protocol = resolveProtocol(route, runtimeConfig);
-      const allowedTransports = resolveTransports(runtimeConfig);
-      if (!allowedTransports.includes(route.transport)) {
-        throw new AppError('TRANSPORT_DISABLED', 403);
-      }
-
+      // 准入:只问用户管理层,不做协议/传输配置判断(传输层纯管道)
       return createDataFlowSession({
         user: admission.user,
-        protocol,
+        protocol: route.protocol,
         transport: route.transport,
         usage: { upload: 0, download: 0, total: admission.used || 0 },
         quotaBytes: admission.quotaBytes || 0,
@@ -75,23 +68,4 @@ export function createAdmissionService({ userAdmin, config, quotaDO }) {
       });
     },
   };
-}
-
-function resolveProtocol(route, config) {
-  let enabled = config.protocols;
-  if (typeof enabled === 'string') enabled = enabled.split(',').map((s) => s.trim());
-  if (!Array.isArray(enabled)) enabled = [config.protocol || 'vless'];
-  if (!enabled.includes(route.protocol)) {
-    throw new AppError('PROTOCOL_DISABLED', 403);
-  }
-  return route.protocol;
-}
-
-function resolveTransports(config) {
-  const configured = Array.isArray(config.transports)
-    ? config.transports
-    : [config.transport || 'websocket'];
-  return configured
-    .map((value) => TRANSPORT_ALIASES[value] || value)
-    .filter((value) => ALLOWED_TRANSPORTS.includes(value));
 }

@@ -27,4 +27,4 @@ routes = [
 
 # 变量
 [vars]
-CORS_ORIGINS = "https://520-10086.cc.cd"
+CORS_ORIGINS = "https://520-10086.cc.cd, https://nohello-ai.github.io"

@@ -25,6 +25,12 @@ export function createApiRouter({ users, sessions }) {
       const url = new URL(request.url);
       const auth = createAuthService(users, sessions, createLoginAttemptService(env));
       const current = await auth.resolve(request);
+      // 管理 token:MiSub 等管理端通过 X-Admin-Token 调用 admin API(免 cookie)
+      const adminGuard = (currentUser) => {
+        const token = env.ADMIN_TOKEN;
+        if (token && request.headers.get('x-admin-token') === token) return;
+        requireAdmin(currentUser);
+      };
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const body = await readBody(request);
         const turnstileToken = body.turnstileToken || request.headers.get('x-turnstile-token') || '';
@@ -47,16 +53,16 @@ export function createApiRouter({ users, sessions }) {
         const usage = await fetchUsage(env, u.userID);
         return jsonResponse({ ok: true, user: { ...publicUser(u), usage } });
       }
-      if (url.pathname === '/api/admin/users' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, users: await userService.listWithUsage() }); }
-      if (url.pathname === '/api/admin/users' && request.method === 'POST') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201); }
+      if (url.pathname === '/api/admin/users' && request.method === 'GET') { adminGuard(current); return jsonResponse({ ok: true, users: await userService.listWithUsage() }); }
+      if (url.pathname === '/api/admin/users' && request.method === 'POST') { adminGuard(current); return jsonResponse({ ok: true, user: await userService.create(await readBody(request)) }, 201); }
       const match = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i);
-      if (match && request.method === 'PATCH') { requireAdmin(current); return jsonResponse({ ok: true, user: await userService.update(match[1], await readBody(request), current) }); }
-      if (match && request.method === 'DELETE') { requireAdmin(current); await userService.delete(match[1], current); return jsonResponse({ ok: true }); }
+      if (match && request.method === 'PATCH') { adminGuard(current); return jsonResponse({ ok: true, user: await userService.update(match[1], await readBody(request), current) }); }
+      if (match && request.method === 'DELETE') { adminGuard(current); await userService.delete(match[1], current); return jsonResponse({ ok: true }); }
       const banMatch = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]+)\/ban$/i);
-      if (banMatch && request.method === 'POST') { requireAdmin(current); validateBanTarget(await users.getByID(banMatch[1])); return jsonResponse({ ok: true, ban: await governance(env).ban(banMatch[1], await readBody(request)) }); }
-      if (banMatch && request.method === 'DELETE') { requireAdmin(current); await governance(env).unban(banMatch[1]); return jsonResponse({ ok: true }); }
-      if (url.pathname === '/api/admin/config' && request.method === 'GET') { requireAdmin(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
-      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { requireAdmin(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
+      if (banMatch && request.method === 'POST') { adminGuard(current); validateBanTarget(await users.getByID(banMatch[1])); return jsonResponse({ ok: true, ban: await governance(env).ban(banMatch[1], await readBody(request)) }); }
+      if (banMatch && request.method === 'DELETE') { adminGuard(current); await governance(env).unban(banMatch[1]); return jsonResponse({ ok: true }); }
+      if (url.pathname === '/api/admin/config' && request.method === 'GET') { adminGuard(current); return jsonResponse({ ok: true, config: normalizeGlobalConfig(await getGlobalConfig(env)) }); }
+      if (url.pathname === '/api/admin/config' && request.method === 'PATCH') { adminGuard(current); const body = await readBody(request); await validateProxyConfig(body, request); const config = normalizeGlobalConfig(body, await getGlobalConfig(env)); await putGlobalConfig(env, config); return jsonResponse({ ok: true, config }); }
       if (url.pathname === '/api/users/me/subscription' && request.method === 'GET') return textResponse(await buildSubscription(env, requireUser(current), request));
       // 免登录订阅:/sub?uuid=X&token=Y(token = sha224(uuid:hostname),客户端直接导入)
       if (url.pathname === '/sub' && request.method === 'GET') {

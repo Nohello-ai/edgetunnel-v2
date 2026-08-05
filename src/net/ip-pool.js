@@ -8,11 +8,13 @@
 const CF_PORTS = Object.freeze([443, 2053, 2083, 2087, 2096, 8443]);
 
 const OPERATOR_LABEL = Object.freeze({
-  cmcc: '🇨🇳 中国移动优选',
-  ct: '🇨🇳 中国电信优选',
-  cu: '🇨🇳 中国联通优选',
-  cf: '🌐 国际优选',
+  cmcc: '中国移动优选',
+  ct: '中国电信优选',
+  cu: '中国联通优选',
+  cf: '国际优选',
 });
+
+export { OPERATOR_LABEL };
 
 /**
  * 从 CIDR 段列表中随机生成指定数量的 IP:端口。

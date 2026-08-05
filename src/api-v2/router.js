@@ -13,7 +13,7 @@ import { createGovernanceService, validateBanTarget } from '../users/governance.
 import { jsonResponse, textResponse } from '../utils/http.js';
 import { identifyOperator } from '../net/operator.js';
 import { getCIDRList } from '../net/cidr.js';
-import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName } from '../net/ip-pool.js';
+import { generateIPs, parseCustomIPs, fetchCustomIPs, pickPort, generateNodeName, OPERATOR_LABEL } from '../net/ip-pool.js';
 import { getTurnstileSiteKey } from '../utils/turnstile.js';
 import { isValidUuidV4, sha224Text } from '../utils/crypto.js';
 
@@ -69,6 +69,11 @@ export function createApiRouter({ users, sessions }) {
         const me = requireUser(current);
         const token = subscriptionToken(me.userID, url.hostname);
         return jsonResponse({ ok: true, url: `${url.protocol}//${url.host}/sub?uuid=${me.userID}&token=${token}` });
+      }
+      // 获取网络专属优化节点:按请求者运营商随机生成 1 个优选节点
+      if (url.pathname === '/api/users/me/node' && request.method === 'GET') {
+        const me = requireUser(current);
+        return jsonResponse({ ok: true, ...(await buildSingleNode(env, me, request)) });
       }
       throw new AppError('NOT_FOUND', 404);
     } catch (error) {
@@ -126,7 +131,7 @@ async function buildSubscription(env, user, request) {
       const expanded = [];
       for (const node of nodes) {
         for (const rep of replacements) {
-          expanded.push({ ...node, address: rep.address, port: rep.port });
+          expanded.push({ ...node, address: rep.address, port: rep.port, name: rep.name });
         }
       }
       nodes = expanded;
@@ -149,6 +154,34 @@ async function buildSubscription(env, user, request) {
   }
 
   return sub;
+}
+
+/** 生成单个网络专属优化节点:按请求者运营商随机选 1 个优选 IP,返回 { isp, node } */
+async function buildSingleNode(env, user, request) {
+  const url = new URL(request.url);
+  const config = normalizeGlobalConfig(await getGlobalConfig(env));
+  const operator = identifyOperator(request.cf);
+  const label = OPERATOR_LABEL[operator] || OPERATOR_LABEL.cf;
+
+  const cidrs = await getCIDRList(operator);
+  const ips = generateIPs(cidrs, 1, { ports: [443] });
+  if (!ips.length) throw new AppError('NODE_UNAVAILABLE', 503);
+  const [address, port] = ips[0].split(':');
+
+  const protocols = config.protocols.map((protocol) => protocol === 'vless' ? { protocol, uuid: user.userID } : { protocol, password: user.trojanSecret });
+  const transports = config.transports.map((transport) => ({
+    transport,
+    ...(transport === 'xhttp' ? { mode: 'stream-one' } : {}),
+  }));
+  let nodes = generateNodeInputs({ protocols, transports, hosts: config.HOSTS, address, port: Number(port) });
+  nodes = nodes.map((node) => {
+    const prefix = node.transport === 'websocket' ? 'ws' : node.transport;
+    const params = normalizeNodeParams({ ...config.节点参数, path: `/${prefix}/${user.userID}/${node.protocol}` }, {
+      randomPath: (path) => `${path}/${randomPathSegment()}`,
+    });
+    return { ...node, path: params.path, query: params.query, name: `${label}1` };
+  });
+  return { isp: label, node: generateSubscription(nodes).split('\n')[0] };
 }
 
 async function resolveIPReplacements(optIP, request, nodeCount = 16) {

@@ -1,7 +1,7 @@
 -- Apply to a new D1 database with: wrangler d1 migrations apply <DATABASE>
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE users (user_id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')), disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0,1)), quota_bytes INTEGER NOT NULL DEFAULT 0 CHECK (quota_bytes >= 0), trojan_secret TEXT NOT NULL, subscription_token_hash TEXT, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE users (user_id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')), disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0,1)), quota_bytes INTEGER NOT NULL DEFAULT -1 CHECK (quota_bytes >= -1), trojan_secret TEXT NOT NULL, subscription_token_hash TEXT, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX idx_users_disabled ON users(disabled);
 CREATE TABLE login_attempts (fingerprint TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, locked_until TEXT, updated_at TEXT NOT NULL);
 CREATE INDEX idx_login_attempts_locked ON login_attempts(locked_until);

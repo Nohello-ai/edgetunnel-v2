@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
   disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
-  quota_bytes INTEGER NOT NULL DEFAULT 0 CHECK (quota_bytes >= 0),
+  quota_bytes INTEGER NOT NULL DEFAULT -1 CHECK (quota_bytes >= -1),
   trojan_secret TEXT NOT NULL,
   subscription_token_hash TEXT,
   settings TEXT NOT NULL DEFAULT '{}',

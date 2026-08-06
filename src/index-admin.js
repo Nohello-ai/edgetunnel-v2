@@ -128,6 +128,10 @@ async function handleInternalAdmit(request, env) {
   const usage = await usageRepo.get(userId);
   const quotaBytes = Number(user.quotaBytes || 0);
   const used = Number(usage.total || 0);
+  // -1 = 无流量(用完/未开通);0 = 无限;>0 = 有限
+  if (quotaBytes === -1) {
+    return jsonResponse({ allowed: false, reason: 'TRAFFIC_QUOTA_EXHAUSTED' }, 403);
+  }
   if (quotaBytes > 0 && used >= quotaBytes) {
     return jsonResponse({ allowed: false, reason: 'TRAFFIC_QUOTA_EXHAUSTED' }, 403);
   }

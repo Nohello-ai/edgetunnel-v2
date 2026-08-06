@@ -85,9 +85,10 @@ export function createUserService(repository, env) {
 }
 
 function validQuota(value) {
-  if (value === undefined || value === null || value === '') return 0;
+  // -1 = 无流量(用完/未开通);0 = 无限;>0 = 有限字节
+  if (value === undefined || value === null || value === '') return -1;
   const quota = Number(value);
-  if (!Number.isSafeInteger(quota) || quota < 0) throw new AppError('QUOTA_INVALID', 400);
+  if (!Number.isSafeInteger(quota) || quota < -1) throw new AppError('QUOTA_INVALID', 400);
   return quota;
 }
 function randomToken(bytes) { const data = crypto.getRandomValues(new Uint8Array(bytes)); return [...data].map((v) => v.toString(16).padStart(2, '0')).join(''); }

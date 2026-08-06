@@ -99,7 +99,7 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
 }
 
 async function forwardTcp({ reader, transport, connector, request, meter }) {
-  const socket = connector.connect({ hostname: request.hostname, port: request.port });
+  const socket = await connector.connect({ hostname: request.hostname, port: request.port });
 
   if (socket.opened) {
     let timer;

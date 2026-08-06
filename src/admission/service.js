@@ -34,9 +34,13 @@ export function createAdmissionService({ userAdmin, config, quotaDO }) {
       // 通过 Service Binding 向管理层查询用户状态（准入决策）
       let admission = { allowed: false, reason: 'ADMISSION_SERVICE_UNAVAILABLE' };
       try {
-        const resp = await userAdmin.fetch(`https://user-admin/internal/admit?userId=${route.userID}`);
+        const timeout = new Promise((_, reject) => {
+          setTimeout(() => reject(new AppError('ADMISSION_SERVICE_TIMEOUT', 504)), 8000);
+        });
+        const resp = await Promise.race([userAdmin.fetch(`https://user-admin/internal/admit?userId=${route.userID}`), timeout]);
         admission = await resp.json();
-      } catch {
+      } catch (error) {
+        if (error?.code === 'ADMISSION_SERVICE_TIMEOUT') throw error;
         throw new AppError('ADMISSION_SERVICE_UNAVAILABLE', 503);
       }
 
@@ -50,10 +54,13 @@ export function createAdmissionService({ userAdmin, config, quotaDO }) {
         try {
           const id = quotaDO.idFromName(route.userID);
           const stub = quotaDO.get(id);
-          const resp = await stub.fetch('https://do/status');
+          const doTimeout = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('DO_STATUS_TIMEOUT')), 3000);
+          });
+          const resp = await Promise.race([stub.fetch('https://do/status'), doTimeout]);
           const status = await resp.json();
           stopVersion = status.stopVersion || 0;
-        } catch {}
+        } catch { /* DO 不可用时 stopVersion 保持 0 */ }
       }
 
       // 准入:只问用户管理层,不做协议/传输配置判断(传输层纯管道)

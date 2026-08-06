@@ -109,7 +109,7 @@ export async function resolveDnsOverTcp({ payload, connector, hostname = '1.1.1.
     throw new AppError('INVALID_DNS_PAYLOAD', 400);
   }
 
-  const socket = connector.connect({ hostname, port });
+  const socket = await connector.connect({ hostname, port });
   if (socket.opened) {
     let timer;
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new AppError('DNS_CONNECT_TIMEOUT', 504)), 5000); });

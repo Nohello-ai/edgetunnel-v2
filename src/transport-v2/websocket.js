@@ -75,7 +75,7 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
     async close(reason) {
       if (closed) return;
       closed = true;
-      try { server.close(reason ? 1011 : 1000, reason ? 'pipeline error' : 'done'); } catch {}
+      try { server.close(reason ? 1011 : 1000, reason ? String(reason?.message || reason).slice(0, 120) : 'done'); } catch {}
     },
     response: new Resp(null, {
       status: 101,

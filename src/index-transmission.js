@@ -53,6 +53,14 @@ export default {
         return jsonResponse({ name: 'edgetunnel-transmission', version: VERSION });
       }
 
+      // 探针:验证 request.fetcher 是否可用(生产环境诊断)
+      if (url.pathname === '/ws/__probe' && request.method === 'GET') {
+        return jsonResponse({
+          hasFetcher: Boolean(request.fetcher),
+          connectType: typeof request?.fetcher?.connect,
+        });
+      }
+
       // 内部 Service Binding 端点（管理层 → 传输层）
       if (url.pathname === '/internal/stop' && request.method === 'POST') {
         return await handleInternalStop(request, env);
@@ -64,6 +72,36 @@ export default {
       // 数据面：解析代理路由
       const dataFlow = parseDataFlowRoute(url);
       if (!dataFlow || !matchesTransport(request, dataFlow.transport)) {
+        // 探针:验证 request.fetcher 是否可用(生产环境诊断)
+        if (url.pathname.startsWith('/ws/__probe')) {
+          if (url.pathname.startsWith('/ws/__probe/connect')) {
+            const target = new URL(request.url).searchParams.get('host') || 'example.com';
+            const port = Number(new URL(request.url).searchParams.get('port')) || 443;
+            try {
+              const socket = request.fetcher.connect({ hostname: target, port });
+              const opened = await Promise.race([
+                (socket.opened || Promise.resolve()).then(() => 'opened'),
+                new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
+              ]);
+              return jsonResponse({
+                connectTest: opened,
+                target: `${target}:${port}`,
+                socketIfaces: {
+                  writable: typeof socket?.writable,
+                  readable: typeof socket?.readable,
+                  close: typeof socket?.close,
+                  opened: typeof socket?.opened,
+                },
+              });
+            } catch (e) {
+              return jsonResponse({ connectTest: 'error: ' + (e?.message || e), target: `${target}:${port}` });
+            }
+          }
+          return jsonResponse({
+            hasFetcher: Boolean(request.fetcher),
+            connectType: typeof request?.fetcher?.connect,
+          });
+        }
         return textResponse(`edgetunnel transmission ${VERSION} is running`);
       }
 

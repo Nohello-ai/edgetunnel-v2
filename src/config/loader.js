@@ -4,7 +4,12 @@ export async function getGlobalConfig(env) {
   if (!env.KV) throw new AppError('KV_NOT_BOUND', 500, 'KV 未绑定，无法读取全局配置');
 
   try {
-    const value = await env.KV.get('global_config', 'text');
+    const value = await Promise.race([
+      env.KV.get('global_config', 'text'),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new AppError('KV_READ_TIMEOUT', 504, 'KV 读取超时')), 5000);
+      }),
+    ]);
     if (value === null) return {};
     return parseJson(value, {});
   } catch (error) {

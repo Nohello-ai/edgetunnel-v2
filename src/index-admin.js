@@ -1,34 +1,23 @@
 /**
- * 用户管理层 Worker — API + 认证 + 配置 + 订阅生成。
- *
- * 改造后：
- *   - D1 独占（传输层不再共享 D1）
- *   - 新增 /internal/admit 和 /internal/report 端点（传输层 → 管理层，Service Binding）
- *   - R2 静态托管功能已禁用（代码保留，R2_ENABLED = false）
- *   - 不再绑定 QUOTA_DO（通过 TRANSMISSION Service Binding 通知传输层）
+ * 用户管理层 Worker — 用户计费/认证/配额。
  *
  * 职责：
  *   - 用户注册/登录/注销
  *   - 用户管理（CRUD、封禁、配额）
- *   - 全局配置读写
- *   - 订阅链接生成
- *   - 接收传输层流量上报（写 D1 + 查配额 + 返回决策）
+ *   - 接收传输层准入/流量上报（Service Binding）
+ *   - 接收 MiSub 用户管理代理（X-Admin-Token）
  *
  * 路由：
  *   /internal/admit  （传输层 → 管理层，Service Binding）
  *   /internal/report （传输层 → 管理层，Service Binding）
  *   /api/auth/*
  *   /api/admin/*
- *   /api/users/*
- *   /sub
  *   /logout
  *   /version
  *
  * Bindings：
- *   DB           — D1（用户/会话/封禁/用量/配置）
- *   KV           — KV（全局配置，下发给传输层）
+ *   DB           — D1（用户/会话/封禁/用量）
  *   TRANSMISSION — Service Binding（调用传输层：封禁/续费通知）
- *   ADMIN_BUCKET — R2（已禁用，不需要配置）
  */
 
 import { createApiRouter } from './api-v2/router.js';
@@ -41,7 +30,6 @@ import { jsonResponse, textResponse } from './utils/http.js';
 import { handleOptions, withCorsHeaders } from './utils/cors.js';
 
 const VERSION = typeof __EDGETUNNEL_VERSION__ === 'string' ? __EDGETUNNEL_VERSION__ : '3.0.0';
-const R2_ENABLED = false; // R2 静态托管功能已禁用
 
 export default {
   async fetch(request, env, ctx) {
@@ -71,23 +59,6 @@ export default {
       }
       if (url.pathname === '/internal/report' && request.method === 'POST') {
         return await handleInternalReport(request, env);
-      }
-
-      // R2 静态文件托管（已禁用，代码保留）
-      if (R2_ENABLED && env.ADMIN_BUCKET) {
-        const path = url.pathname === '/' ? '/index.html' : url.pathname;
-        const apiPaths = ['/api/', '/logout', '/sub', '/version', '/internal/'];
-        if (!apiPaths.some(p => path.startsWith(p))) {
-          const key = path.replace(/^\//, '');
-          const obj = await env.ADMIN_BUCKET.get(key).catch(() => null);
-          if (obj) {
-            const headers = new Headers();
-            headers.set('content-type', contentType(key) || 'application/octet-stream');
-            headers.set('cache-control', 'public, max-age=3600');
-            response = new Response(obj.body, { headers });
-            return withCorsHeaders(response, request, env);
-          }
-        }
       }
 
       // 控制面 API
@@ -183,18 +154,4 @@ async function handleInternalReport(request, env) {
   }
 
   return jsonResponse({ allowed: true });
-}
-
-function contentType(key) {
-  if (key.endsWith('.html')) return 'text/html; charset=utf-8';
-  if (key.endsWith('.js')) return 'application/javascript';
-  if (key.endsWith('.css')) return 'text/css';
-  if (key.endsWith('.json')) return 'application/json';
-  if (key.endsWith('.png')) return 'image/png';
-  if (key.endsWith('.jpg') || key.endsWith('.jpeg')) return 'image/jpeg';
-  if (key.endsWith('.svg')) return 'image/svg+xml';
-  if (key.endsWith('.ico')) return 'image/x-icon';
-  if (key.endsWith('.woff2')) return 'font/woff2';
-  if (key.endsWith('.txt')) return 'text/plain; charset=utf-8';
-  return null;
 }

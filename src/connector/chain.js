@@ -9,7 +9,6 @@
 import { socks5Connect } from './socks5.js';
 import { httpConnect } from './http.js';
 import { proxyIPConnect } from './proxyip.js';
-import { isCloudflareIP } from '../net/ip-pool.js';
 
 /**
  * 创建带反代策略的连接器。
@@ -22,18 +21,28 @@ export function createFallbackConnector(directConnect, proxyConfig) {
   const mode = proxyConfig?.模式;
 
   return {
-    connect: async function connect(target) {
-      // auto 模式：检测目标是否在 Cloudflare 上
+    connect: async function connect(target, options = {}) {
+      // auto 模式：先直连，失败(CF 拒绝 HTTP 服务/超时)→ 反代
+      // (不做域名/DNS 判断:DoH 在 CF 环境可能失败,直接"试直连 + 失败反代"最可靠)
       if (mode === 'auto') {
-        if (isCloudflareIP(target.hostname)) return proxyConnect(directConnect, target, proxyConfig);
-        const socket = directConnect.connect(target);
-        if (socket.opened) await socket.opened;
-        return socket;
+        try {
+          const socket = directConnect.connect(target);
+          if (socket.opened) {
+            let timer;
+            const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('DIRECT_TIMEOUT')), 5000); });
+            await Promise.race([socket.opened, timeout]);
+            clearTimeout(timer);
+          }
+          return socket;
+        } catch {
+          try { return await proxyConnect(directConnect, target, proxyConfig, options); }
+          catch { const s2 = directConnect.connect(target); if (s2.opened) await s2.opened; return s2; }
+        }
       }
 
       // socks5 全局模式：不走直连，直接走代理
       if (mode === 'socks5' && proxyConfig?.SOCKS5?.全局) {
-        return proxyConnect(directConnect, target, proxyConfig);
+        return proxyConnect(directConnect, target, proxyConfig, options);
       }
 
       // 其他模式：先直连，失败走反代
@@ -47,7 +56,7 @@ export function createFallbackConnector(directConnect, proxyConfig) {
         }
         return socket;
       } catch {
-        return proxyConnect(directConnect, target, proxyConfig);
+        return proxyConnect(directConnect, target, proxyConfig, options);
       }
     },
   };
@@ -68,7 +77,7 @@ function parseAccount(text) {
   return { hostname, port: port ? parseInt(port) : 1080, username, password };
 }
 
-async function proxyConnect(directConnect, target, proxyConfig) {
+async function proxyConnect(directConnect, target, proxyConfig, options = {}) {
   const errors = [];
 
   // SOCKS5/HTTP/HTTPS 代理
@@ -92,7 +101,7 @@ async function proxyConnect(directConnect, target, proxyConfig) {
   const proxyIP = proxyConfig?.PROXYIP;
   if (proxyIP && proxyIP !== 'none') {
     try {
-      return await proxyIPConnect(directConnect, target, proxyIP);
+      return await proxyIPConnect(directConnect, target, proxyIP, options);
     } catch (err) {
       errors.push(`proxyip: ${err.message}`);
     }

@@ -30,6 +30,7 @@
 import { createAdmissionDependencies } from './admission/repositories.js';
 import { createAdmissionService } from './admission/service.js';
 import { createDirectConnector } from './connector/direct.js';
+import { proxyIPConnect } from './connector/proxyip.js';
 import { createFallbackConnector } from './connector/chain.js';
 import { getGlobalConfig } from './config/loader.js';
 import { normalizeGlobalConfig } from './config/schema.js';
@@ -53,14 +54,6 @@ export default {
         return jsonResponse({ name: 'edgetunnel-transmission', version: VERSION });
       }
 
-      // 探针:验证 request.fetcher 是否可用(生产环境诊断)
-      if (url.pathname === '/ws/__probe' && request.method === 'GET') {
-        return jsonResponse({
-          hasFetcher: Boolean(request.fetcher),
-          connectType: typeof request?.fetcher?.connect,
-        });
-      }
-
       // 内部 Service Binding 端点（管理层 → 传输层）
       if (url.pathname === '/internal/stop' && request.method === 'POST') {
         return await handleInternalStop(request, env);
@@ -72,49 +65,30 @@ export default {
       // 数据面：解析代理路由
       const dataFlow = parseDataFlowRoute(url);
       if (!dataFlow || !matchesTransport(request, dataFlow.transport)) {
-        // 探针:验证 request.fetcher 是否可用(生产环境诊断)
-        if (url.pathname.startsWith('/ws/__probe')) {
-          if (url.pathname.startsWith('/ws/__probe/connect')) {
-            const target = new URL(request.url).searchParams.get('host') || 'example.com';
-            const port = Number(new URL(request.url).searchParams.get('port')) || 443;
-            try {
-              const socket = request.fetcher.connect({ hostname: target, port });
-              const opened = await Promise.race([
-                (socket.opened || Promise.resolve()).then(() => 'opened'),
-                new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
-              ]);
-              return jsonResponse({
-                connectTest: opened,
-                target: `${target}:${port}`,
-                socketIfaces: {
-                  writable: typeof socket?.writable,
-                  readable: typeof socket?.readable,
-                  close: typeof socket?.close,
-                  opened: typeof socket?.opened,
-                },
-              });
-            } catch (e) {
-              return jsonResponse({ connectTest: 'error: ' + (e?.message || e), target: `${target}:${port}` });
-            }
-          }
-          return jsonResponse({
-            hasFetcher: Boolean(request.fetcher),
-            connectType: typeof request?.fetcher?.connect,
-          });
-        }
         return textResponse(`edgetunnel transmission ${VERSION} is running`);
       }
 
       // 准入控制（通过 Service Binding 调管理层）
       const dependencies = createAdmissionDependencies(env);
-      const session = await createAdmissionService(dependencies).admit(dataFlow);
+      const t0 = Date.now();
+      let session;
+      try {
+        session = await createAdmissionService(dependencies).admit(dataFlow);
+      } catch (admitError) {
+        throw admitError;
+      }
 
       // 连接器装配(用 request.fetcher.connect,规避 cloudflare:sockets 的风控限制)
       const directConnect = createDirectConnector(request);
       const config = normalizeGlobalConfig(await getGlobalConfig(env));
-      const connector = config.反代?.模式
-        ? createFallbackConnector(directConnect, config.反代)
-        : directConnect;
+      // 反代配置:KV 配额未恢复,代码强制用 v3 反代池(没配置默认 ProxyIP)
+      const V3_PROXY_POOL = 'sin.proxyip.cmliuSsSs.nEt';
+      const proxyCfg = {
+        模式: config.反代?.模式 || 'proxyip',
+        PROXYIP: V3_PROXY_POOL,
+        SOCKS5: config.反代?.SOCKS5 || { 账号: '' },
+      };
+      const connector = createFallbackConnector(directConnect, proxyCfg);
 
       // 启动数据流管道
       // 注意:不向 pipeline/transport 传递 runtime——此前把 config 误传为 runtime,

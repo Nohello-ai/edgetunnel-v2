@@ -36,6 +36,7 @@ export function createVlessParser(credentials, limits = {}) {
         isUDP: command === 2,
         payload,
         responseHeader: Uint8Array.of(version, 0),
+        raw: buffer.slice(0), // 完整原始首包(vless 头+payload),反代透明转发需要
       }), payload);
     },
   };

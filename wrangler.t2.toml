@@ -1,7 +1,7 @@
-name = "edgetunnel-transmission"
+name = "edgetunnel-transmission2"
 main = "_worker-transmission.js"
 compatibility_date = "2024-09-01"
-compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+compatibility_flags = ["nodejs_compat"]
 account_id = "0e978a4a2e65977ade0b08f20019a498"
 
 # Durable Object:传输层自己 export QuotaDO 类

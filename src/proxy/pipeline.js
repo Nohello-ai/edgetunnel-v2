@@ -99,7 +99,13 @@ async function forwardDnsDatagrams({ reader, transport, connector, request, prot
 }
 
 async function forwardTcp({ reader, transport, connector, request, meter }) {
-  const socket = await connector.connect({ hostname: request.hostname, port: request.port });
+  // firstPacket:完整原始首包(vless 头+payload)。
+  // 反代(透明 TCP 转发)连上后需要把首包丢给它,它解析出目标再转发(v3 同款);
+  // 直连时忽略,由下方 payload 正常写入。
+  const socket = await connector.connect(
+    { hostname: request.hostname, port: request.port },
+    { firstPacket: request.raw }
+  );
 
   if (socket.opened) {
     let timer;
@@ -112,7 +118,8 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
 
   const upload = (async () => {
     try {
-      if (request.payload.byteLength) await remoteWriter.write(request.payload);
+      // 反代已把 firstPacket(完整原始首包)写入,这里不再重复写 payload
+      if (!socket.firstPacketWritten && request.payload.byteLength) await remoteWriter.write(request.payload);
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -131,6 +138,11 @@ async function forwardTcp({ reader, transport, connector, request, meter }) {
       if (request.responseHeader?.byteLength) {
         await transport.write(request.responseHeader);
         meter.addDownload(request.responseHeader.byteLength);
+      }
+      // 反代验证时缓存的首段数据,先发给客户端
+      if (socket._firstChunk?.byteLength) {
+        await transport.write(socket._firstChunk);
+        meter.addDownload(socket._firstChunk.byteLength);
       }
       while (true) {
         const { done, value } = await remoteReader.read();

@@ -24,7 +24,7 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
   const client = pair[0];
   const server = pair[1];
   server.binaryType = 'arraybuffer';
-  server.accept();
+  try { server.accept({ allowHalfOpen: true }); } catch { server.accept(); }
 
   const queue = [];
   let queuedBytes = 0;
@@ -80,7 +80,10 @@ export function openWebSocketTransport(request, limits = {}, runtime = globalThi
     response: new Resp(null, {
       status: 101,
       webSocket: client,
-      headers: earlyData.protocol ? { 'sec-websocket-protocol': earlyData.protocol } : undefined,
+      headers: {
+        'sec-websocket-extensions': '',
+        ...(earlyData.protocol ? { 'sec-websocket-protocol': earlyData.protocol } : {}),
+      },
     }),
     metadata: Object.freeze({ name: 'websocket' }),
   };

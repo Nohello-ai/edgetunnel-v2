@@ -32,5 +32,6 @@ export function createProxyRequest(input) {
     isUDP: Boolean(input.isUDP),
     payload: new Uint8Array(input.payload || []),
     responseHeader: new Uint8Array(input.responseHeader || []),
+    raw: input.raw ? new Uint8Array(input.raw) : new Uint8Array(0),
   });
 }

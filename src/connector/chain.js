@@ -7,7 +7,6 @@
  *  - auto：自动检测，目标为 Cloudflare 则走反代，否则直连
  */
 import { socks5Connect } from './socks5.js';
-import { httpConnect } from './http.js';
 import { proxyIPConnect } from './proxyip.js';
 
 /**
@@ -22,31 +21,7 @@ export function createFallbackConnector(directConnect, proxyConfig) {
 
   return {
     connect: async function connect(target, options = {}) {
-      // auto 模式：先直连，失败(CF 拒绝 HTTP 服务/超时)→ 反代
-      // (不做域名/DNS 判断:DoH 在 CF 环境可能失败,直接"试直连 + 失败反代"最可靠)
-      if (mode === 'auto') {
-        try {
-          const socket = directConnect.connect(target);
-          if (socket.opened) {
-            let timer;
-            const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('DIRECT_TIMEOUT')), 5000); });
-            await Promise.race([socket.opened, timeout]);
-            clearTimeout(timer);
-          }
-          return socket;
-        } catch {
-          try { return await proxyConnect(directConnect, target, proxyConfig, options); }
-          catch { const s2 = directConnect.connect(target); if (s2.opened) await s2.opened; return s2; }
-        }
-      }
-
-      // socks5 全局模式：不走直连，直接走代理
-      if (mode === 'socks5' && proxyConfig?.SOCKS5?.全局) {
-        return proxyConnect(directConnect, target, proxyConfig, options);
-      }
-
-      // 其他模式：先直连，失败走反代
-      try {
+      const tryDirect = async () => {
         const socket = directConnect.connect(target);
         if (socket.opened) {
           let timer;
@@ -55,8 +30,27 @@ export function createFallbackConnector(directConnect, proxyConfig) {
           clearTimeout(timer);
         }
         return socket;
+      };
+
+      // socks5 全局模式：所有流量直接走 SOCKS5(不试直连)
+      if (mode === 'socks5' && proxyConfig?.SOCKS5?.全局) {
+        return proxyConnect(directConnect, target, proxyConfig, options, 1);
+      }
+
+      // 其他模式：先直连(普通网站),失败(CF 拒 HTTP 服务/超时)→ 按模式走代理
+      try {
+        return await tryDirect();
       } catch {
-        return proxyConnect(directConnect, target, proxyConfig, options);
+        if (mode === 'proxyip') {
+          // Proxy:只走内置反代池
+          return proxyConnect(directConnect, target, proxyConfig, options, 2);
+        }
+        if (mode === 'socks5') {
+          // SOCKS5 非全局:只 CF 流量走 SOCKS5
+          return proxyConnect(directConnect, target, proxyConfig, options, 1);
+        }
+        // auto:有 SOCKS5 用 SOCKS5,没有则用 Proxy
+        return proxyConnect(directConnect, target, proxyConfig, options, 0);
       }
     },
   };
@@ -77,35 +71,33 @@ function parseAccount(text) {
   return { hostname, port: port ? parseInt(port) : 1080, username, password };
 }
 
-async function proxyConnect(directConnect, target, proxyConfig, options = {}) {
+async function proxyConnect(directConnect, target, proxyConfig, options = {}, only = 0) {
   const errors = [];
-
-  // SOCKS5/HTTP/HTTPS 代理
+  // only: 0=先 SOCKS5 再 Proxy, 1=只 SOCKS5, 2=只 Proxy
   const socksConfig = proxyConfig?.SOCKS5;
-  if (socksConfig?.启用) {
+  const hasSocks = socksConfig?.账号 && String(socksConfig.账号).trim();
+  if (hasSocks && only !== 2) {
     try {
       const addr = parseAccount(socksConfig.账号);
       const socket = directConnect.connect({ hostname: addr.hostname || '127.0.0.1', port: addr.port || 1080 });
       if (socket.opened) await socket.opened;
-      const type = socksConfig.启用;
-      if (type === 'socks5') await socks5Connect(socket, target, addr);
-      else if (type === 'http') await httpConnect(socket, target, addr, false);
-      else if (type === 'https') await httpConnect(socket, target, addr, true);
+      await socks5Connect(socket, target, addr);
       return socket;
     } catch (err) {
-      errors.push(`${socksConfig.启用}: ${err.message}`);
+      errors.push('socks5: ' + err.message);
     }
   }
-
-  // ProxyIP
-  const proxyIP = proxyConfig?.PROXYIP;
-  if (proxyIP && proxyIP !== 'none') {
-    try {
-      return await proxyIPConnect(directConnect, target, proxyIP, options);
-    } catch (err) {
-      errors.push(`proxyip: ${err.message}`);
+  // ProxyIP(内置反代池)
+  if (only !== 1) {
+    const proxyIP = proxyConfig?.PROXYIP;
+    if (proxyIP && proxyIP !== 'none') {
+      try {
+        return await proxyIPConnect(directConnect, target, proxyIP, options);
+      } catch (err) {
+        errors.push('proxyip: ' + err.message);
+      }
     }
   }
-
-  throw new Error(`Proxy failed: ${errors.join('; ')}`);
+  throw new Error('Proxy failed: ' + errors.join('; '));
 }
+
